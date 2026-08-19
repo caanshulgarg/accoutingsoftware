@@ -430,6 +430,7 @@ let state = {
   coaExpanded: {},
   periodFrom: null,
   periodTo: null,
+  voucherSupplyType: 'intra',
 };
 
 const MODULES = [
@@ -622,10 +623,11 @@ function classifyMatch(bankLine, candidateVoucherLines, accountId){
 async function postVoucher(companyId, date, type, narration, lines){
   const { data: voucher, error } = await supa
     .from("vouchers")
-    .insert({ company_id: companyId, voucher_date: date, voucher_type: type, narration, source: "manual" })
+    .insert({ company_id: companyId, voucher_date: date, voucher_type: type, narration, source: "manual", supply_type: state.voucherSupplyType || "intra" })
     .select().single();
   if(error){ showToast("Error: " + error.message, "err"); return false; }
-  const rows = lines.map(l => ({ voucher_id: voucher.id, account_id: l.accountId, line_type: l.type, amount: l.amount }));
+  const rows = lines.map(l => ({ voucher_id: voucher.id, account_id: l.accountId, line_type: l.type, amount: l.amount,
+    tax_kind: l.taxKind || null, tax_rate: l.taxRate ?? null, taxable_value: l.taxableValue ?? null }));
   const { error: err2 } = await supa.from("voucher_lines").insert(rows);
   if(err2){
     // Roll back the orphaned voucher header so a failed post doesn't leave an empty entry behind
@@ -840,6 +842,8 @@ function renderCOABody(content){
               <span style="flex:1;font-size:12.5px;">
                 ${escapeHtml(a.name)}
                 ${a.alias?`<span style="color:var(--muted2);font-size:11px;"> (${escapeHtml(a.alias)})</span>`:''}
+                ${a.gst_applicable&&parseFloat(a.gst_rate)>0?`<span class="match-badge" style="background:#dbeafe;color:#1d4ed8;">GST ${a.gst_rate}%</span>`:''}
+                ${a.tds_applicable&&parseFloat(a.tds_rate)>0?`<span class="match-badge" style="background:#fef3c7;color:#b45309;">TDS ${a.tds_rate}%</span>`:''}
                 ${parseFloat(a.opening_balance)>0?`<span style="color:var(--muted);font-size:11px;"> — Op: ${fmtINR(a.opening_balance)} ${a.opening_balance_type==='credit'?'Cr':'Dr'}</span>`:''}
               </span>
               ${canWrite ? `<button class="icon-btn" data-del-acc="${a.id}" title="Delete ledger">✕</button>` : ''}
@@ -1095,6 +1099,13 @@ async function quickCreateLedger(name){
     alias: result.alias || null,
     opening_balance: result.openingBalance || 0,
     opening_balance_type: result.openingType || "debit",
+    gst_applicable: result.gstApplicable,
+    gst_rate: result.gstRate,
+    gst_direction: result.gstDirection,
+    hsn_code: result.hsnCode,
+    tds_applicable: result.tdsApplicable,
+    tds_section: result.tdsSection,
+    tds_rate: result.tdsRate,
   });
   if(acc){
     state.coa.push(acc);
@@ -1155,6 +1166,44 @@ function ledgerCreateModal(ledgerName, groups){
           </div>
         </div>
 
+        <div style="border-top:1px solid var(--border);margin-top:10px;padding-top:10px;">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">
+            Tax setup <span style="font-weight:400;text-transform:none;letter-spacing:0;">— set once here, applied automatically on every entry</span>
+          </div>
+          <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end;">
+            <label style="font-size:12px;display:flex;align-items:center;gap:5px;">
+              <input type="checkbox" id="lcm-gst" /> GST
+            </label>
+            <div class="field" style="width:110px;"><label>Rate %</label>
+              <select class="form-input" id="lcm-gstrate" disabled style="width:100%;">
+                ${GST_RATES.map(g=>`<option value="${g.rate}" ${g.rate===18?'selected':''}>${g.rate}%</option>`).join("")}
+              </select>
+            </div>
+            <div class="field" style="width:120px;"><label>Type</label>
+              <select class="form-input" id="lcm-gstdir" disabled style="width:100%;">
+                <option value="output">Output (sales)</option>
+                <option value="input">Input (purchase)</option>
+              </select>
+            </div>
+            <div class="field" style="width:110px;"><label>HSN/SAC</label>
+              <input class="form-input" id="lcm-hsn" placeholder="optional" style="width:100%;" />
+            </div>
+          </div>
+          <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:8px;">
+            <label style="font-size:12px;display:flex;align-items:center;gap:5px;">
+              <input type="checkbox" id="lcm-tds" /> TDS
+            </label>
+            <div class="field" style="flex:1;min-width:220px;"><label>Section</label>
+              <select class="form-input" id="lcm-tdssection" disabled style="width:100%;">
+                ${TDS_SECTIONS.filter(s=>s.code!=='custom').map(s=>`<option value="${s.code}" data-rate="${s.rate}">${s.label}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field" style="width:90px;"><label>Rate %</label>
+              <input class="form-input" id="lcm-tdsrate" type="number" step="0.1" disabled style="width:100%;" />
+            </div>
+          </div>
+        </div>
+
         <div id="lcm-newgroup-panel" style="display:none;background:#eef2f8;border:1px solid #c7d7ee;border-radius:8px;padding:10px;margin:8px 0;">
           <div class="row" style="gap:8px;flex-wrap:wrap;">
             <input class="form-input" id="lcm-ng-name" placeholder="New sub-group name" style="flex:1;min-width:150px;" />
@@ -1184,6 +1233,37 @@ function ledgerCreateModal(ledgerName, groups){
     const obEl     = overlay.querySelector("#lcm-ob");
     const obTypeEl = overlay.querySelector("#lcm-obtype");
     const errEl    = overlay.querySelector("#lcm-error");
+    const gstChk   = overlay.querySelector("#lcm-gst");
+    const gstRate  = overlay.querySelector("#lcm-gstrate");
+    const gstDir   = overlay.querySelector("#lcm-gstdir");
+    const hsnEl    = overlay.querySelector("#lcm-hsn");
+    const tdsChk   = overlay.querySelector("#lcm-tds");
+    const tdsSec   = overlay.querySelector("#lcm-tdssection");
+    const tdsRate  = overlay.querySelector("#lcm-tdsrate");
+
+    gstChk.addEventListener("change", ()=>{
+      gstRate.disabled = gstDir.disabled = !gstChk.checked;
+      if(gstChk.checked) gstRate.focus();
+    });
+    tdsChk.addEventListener("change", ()=>{
+      tdsSec.disabled = tdsRate.disabled = !tdsChk.checked;
+      if(tdsChk.checked){
+        const opt = tdsSec.options[tdsSec.selectedIndex];
+        tdsRate.value = opt ? opt.dataset.rate : "";
+        tdsSec.focus();
+      }
+    });
+    tdsSec.addEventListener("change", ()=>{
+      const opt = tdsSec.options[tdsSec.selectedIndex];
+      tdsRate.value = opt ? opt.dataset.rate : "";
+    });
+
+    // Pre-tick GST for sales/purchase ledgers, since those almost always carry it
+    if(guessed && /sales|purchase|direct income|indirect income/i.test(guessed.name)){
+      gstChk.checked = true;
+      gstRate.disabled = gstDir.disabled = false;
+      gstDir.value = /purchase/i.test(guessed.name) ? "input" : "output";
+    }
 
     const showErr = (m)=>{ errEl.textContent = m; errEl.style.display = "block"; };
     const clearErr = ()=>{ errEl.style.display = "none"; };
@@ -1292,6 +1372,13 @@ function ledgerCreateModal(ledgerName, groups){
         group: selectedGroup,
         openingBalance: parseFloat(obEl.value) || 0,
         openingType: obTypeEl.value,
+        gstApplicable: gstChk.checked,
+        gstRate: gstChk.checked ? parseFloat(gstRate.value) || 0 : 0,
+        gstDirection: gstDir.value,
+        hsnCode: hsnEl.value.trim() || null,
+        tdsApplicable: tdsChk.checked,
+        tdsSection: tdsChk.checked ? tdsSec.value : null,
+        tdsRate: tdsChk.checked ? parseFloat(tdsRate.value) || 0 : 0,
       });
     };
     const cancel = ()=>{ document.body.removeChild(overlay); resolve(null); };
@@ -1319,6 +1406,87 @@ function defaultVoucherDate(){
     return state.periodTo;
   }
   return today;
+}
+
+// Applies a ledger's configured GST / TDS to the line just entered, inserting
+// the tax lines immediately after it. Returns true if anything was added.
+// This is what removes the need for the GST/TDS panels in normal entry.
+function autoApplyLedgerTax(idx){
+  const line = state.voucherLines[idx];
+  if(!line || !line.accountId || line.taxApplied) return false;
+  const amount = parseFloat(line.amount) || 0;
+  if(amount <= 0) return false;
+
+  const acc = state.coa.find(a=>a.id===line.accountId);
+  if(!acc) return false;
+
+  const inserts = [];
+  const isInter = (state.voucherSupplyType || "intra") === "inter";
+
+  // ---- GST ----
+  if(acc.gst_applicable && parseFloat(acc.gst_rate) > 0){
+    const rate = parseFloat(acc.gst_rate);
+    const isOutput = (acc.gst_direction || "output") === "output";
+    // Output tax is a liability (credit); input tax is an ITC asset (debit)
+    const taxSide = isOutput ? "credit" : "debit";
+    const totalTax = Math.round(amount * rate) / 100;
+
+    if(isInter){
+      const id = findTaxLedgerId(isOutput ? "IGST Output" : "IGST Input", isOutput ? "liability" : "asset");
+      if(id) inserts.push({ accountId: id, type: taxSide, amount: totalTax.toFixed(2),
+                            taxKind: "igst", taxRate: rate, taxableValue: amount });
+    } else {
+      const half = Math.round(totalTax * 50) / 100;
+      const cId = findTaxLedgerId(isOutput ? "CGST Output" : "CGST Input", isOutput ? "liability" : "asset");
+      const sId = findTaxLedgerId(isOutput ? "SGST Output" : "SGST Input", isOutput ? "liability" : "asset");
+      if(cId) inserts.push({ accountId: cId, type: taxSide, amount: half.toFixed(2),
+                             taxKind: "cgst", taxRate: rate/2, taxableValue: amount });
+      if(sId) inserts.push({ accountId: sId, type: taxSide, amount: half.toFixed(2),
+                             taxKind: "sgst", taxRate: rate/2, taxableValue: amount });
+    }
+  }
+
+  // ---- TDS (deducted by us when booking an expense) ----
+  if(acc.tds_applicable && parseFloat(acc.tds_rate) > 0){
+    const rate = parseFloat(acc.tds_rate);
+    const tds = Math.round(amount * rate) / 100;
+    const id = findTaxLedgerId("TDS Payable", "liability");
+    if(id && tds > 0){
+      inserts.push({ accountId: id, type: "credit", amount: tds.toFixed(2),
+                     taxKind: "tds", taxRate: rate, taxableValue: amount });
+    }
+  }
+
+  if(!inserts.length) return false;
+
+  // Mark the source line so re-entering its amount doesn't duplicate the tax
+  state.voucherLines[idx] = { ...line, taxApplied: true };
+  const newLines = inserts.map(i=>({
+    id: uid("ln"), accountId: i.accountId, type: i.type, amount: i.amount,
+    taxKind: i.taxKind, taxRate: i.taxRate, taxableValue: i.taxableValue, taxApplied: true,
+  }));
+  state.voucherLines.splice(idx+1, 0, ...newLines);
+
+  const gstAdded = inserts.filter(i=>i.taxKind!=="tds").length;
+  const tdsAdded = inserts.filter(i=>i.taxKind==="tds").length;
+  const bits = [];
+  if(gstAdded) bits.push(`GST ${acc.gst_rate}%`);
+  if(tdsAdded) bits.push(`TDS ${acc.tds_rate}%`);
+  showToast(`${bits.join(" + ")} applied automatically`);
+  return true;
+}
+
+// Resolves a tax ledger by name, creating it under the right group if missing.
+// Synchronous lookup against already-loaded ledgers; creation happens lazily.
+function findTaxLedgerId(name, nature){
+  const existing = state.coa.find(a=>a.name.toLowerCase() === name.toLowerCase());
+  if(existing) return existing.id;
+  // Fire-and-forget creation so the next entry finds it; this one falls back
+  // to the panel if the ledger genuinely doesn't exist yet.
+  ensureAccount(name, nature).then(id=>{
+    if(id) showToast(`Created missing tax ledger "${name}" — re-enter the amount to apply`, "err");
+  });
+  return null;
 }
 
 function renderEntry(content){
@@ -1355,6 +1523,12 @@ function renderEntry(content){
       <div class="row" style="gap:12px;flex-wrap:wrap;margin-bottom:14px;justify-content:space-between;">
         <div class="row" style="gap:12px;flex-wrap:wrap;">
           <div class="field"><label>Date</label><input class="form-input" type="date" id="v-date" value="${state.draftDate || defaultVoucherDate()}" /></div>
+          <div class="field"><label>Supply</label>
+            <select class="form-input" id="v-supply" style="width:135px;">
+              <option value="intra" ${(state.voucherSupplyType||'intra')!=='inter'?'selected':''}>Intra (C+S GST)</option>
+              <option value="inter" ${state.voucherSupplyType==='inter'?'selected':''}>Inter (IGST)</option>
+            </select>
+          </div>
           <div class="field"><label>Voucher type <span style="color:var(--muted2);font-weight:400;">(${IS_MAC?"Ctrl+4…9":"F4–F9"})</span></label>
             <select class="form-input" id="v-type">
               ${["Contra","Payment","Receipt","Journal","Sales","Purchase"].map(t=>`<option ${ (state.draftType||"Journal")===t?'selected':''}>${t}</option>`).join("")}
@@ -1637,6 +1811,15 @@ function renderEntry(content){
       e.preventDefault();
       const isLast = idx === state.voucherLines.length - 1;
 
+      // Tally-style: if this ledger is configured for GST or TDS, generate the
+      // tax lines right now from the amount just typed. No panel, no extra keys.
+      const added = autoApplyLedgerTax(idx);
+      if(added){
+        state.focusLastLine = true;
+        renderEntry(content);
+        return;
+      }
+
       if(!isLast){
         const nextRow = content.querySelector(`.line-row[data-index="${idx+1}"]`);
         if(nextRow) nextRow.querySelector(".line-acc-input").focus();
@@ -1675,6 +1858,7 @@ function renderEntry(content){
   document.getElementById("add-credit").addEventListener("click", ()=>{ addDraftLine("credit"); renderEntry(content); });
   document.getElementById("v-date").addEventListener("change", e=> state.draftDate = e.target.value);
   document.getElementById("v-type").addEventListener("change", e=> state.draftType = e.target.value);
+  document.getElementById("v-supply").addEventListener("change", e=> state.voucherSupplyType = e.target.value);
   document.getElementById("v-narration").addEventListener("input", e=> state.draftNarration = e.target.value);
   // Enter on narration posts the voucher — completes the keyboard-only loop
   document.getElementById("v-narration").addEventListener("keydown", e=>{
@@ -1799,7 +1983,8 @@ async function submitVoucher(content){
   const date = document.getElementById("v-date").value;
   const type = document.getElementById("v-type").value;
   const narration = document.getElementById("v-narration").value;
-  const lineArgs = validLines.map(l=>({accountId:l.accountId,type:l.type,amount:parseFloat(l.amount)}));
+  const lineArgs = validLines.map(l=>({accountId:l.accountId,type:l.type,amount:parseFloat(l.amount),
+    taxKind:l.taxKind, taxRate:l.taxRate, taxableValue:l.taxableValue}));
   const hasStock = state.pendingStockLines && state.pendingStockLines.length;
   const ok = hasStock
     ? await postVoucherWithStock(state.activeCompanyId, date, type, narration, lineArgs, state.pendingStockLines)
@@ -3740,10 +3925,11 @@ async function insertStockMovements(rows){
 async function postVoucherWithStock(companyId, date, type, narration, lines, stockLines){
   const { data: voucher, error } = await supa
     .from("vouchers")
-    .insert({ company_id: companyId, voucher_date: date, voucher_type: type, narration, source: "manual" })
+    .insert({ company_id: companyId, voucher_date: date, voucher_type: type, narration, source: "manual", supply_type: state.voucherSupplyType || "intra" })
     .select().single();
   if(error){ showToast("Error: " + error.message, "err"); return false; }
-  const rows = lines.map(l => ({ voucher_id: voucher.id, account_id: l.accountId, line_type: l.type, amount: l.amount }));
+  const rows = lines.map(l => ({ voucher_id: voucher.id, account_id: l.accountId, line_type: l.type, amount: l.amount,
+    tax_kind: l.taxKind || null, tax_rate: l.taxRate ?? null, taxable_value: l.taxableValue ?? null }));
   const { error: err2 } = await supa.from("voucher_lines").insert(rows);
   if(err2){
     await supa.from("vouchers").delete().eq("id", voucher.id);
@@ -3767,10 +3953,11 @@ async function postVoucherWithStock(companyId, date, type, narration, lines, sto
 async function postVoucherGetId(companyId, date, type, narration, lines, stockLines){
   const { data: voucher, error } = await supa
     .from("vouchers")
-    .insert({ company_id: companyId, voucher_date: date, voucher_type: type, narration, source: "manual" })
+    .insert({ company_id: companyId, voucher_date: date, voucher_type: type, narration, source: "manual", supply_type: state.voucherSupplyType || "intra" })
     .select().single();
   if(error){ showToast("Error: " + error.message, "err"); return null; }
-  const rows = lines.map(l => ({ voucher_id: voucher.id, account_id: l.accountId, line_type: l.type, amount: l.amount }));
+  const rows = lines.map(l => ({ voucher_id: voucher.id, account_id: l.accountId, line_type: l.type, amount: l.amount,
+    tax_kind: l.taxKind || null, tax_rate: l.taxRate ?? null, taxable_value: l.taxableValue ?? null }));
   const { error: err2 } = await supa.from("voucher_lines").insert(rows);
   if(err2){
     await supa.from("vouchers").delete().eq("id", voucher.id);
@@ -5094,12 +5281,65 @@ function generateGstFiling(content){
     sgst: round2(outward.samt - itc.samt),
   };
 
+  // ---- Voucher-level GST (entries made directly in Voucher Entry, where the
+  // ledger carried its own GST config) — included so the return isn't limited
+  // to invoices raised through the Invoicing module.
+  const voucherGst = { outputTaxable:0, outputIgst:0, outputCgst:0, outputSgst:0,
+                       inputTaxable:0, inputIgst:0, inputCgst:0, inputSgst:0 };
+  (state.vouchers||[]).forEach(v=>{
+    const d = new Date(v.voucher_date);
+    if(d.getMonth()+1 !== month || d.getFullYear() !== year) return;
+    (v.voucher_lines||[]).forEach(l=>{
+      if(!l.tax_kind || l.tax_kind === 'tds') return;
+      const amt = parseFloat(l.amount)||0;
+      const txv = parseFloat(l.taxable_value)||0;
+      const isOutput = l.line_type === 'credit';
+      const p = isOutput ? 'output' : 'input';
+      if(l.tax_kind === 'igst') voucherGst[p+'Igst'] += amt;
+      if(l.tax_kind === 'cgst'){ voucherGst[p+'Cgst'] += amt; voucherGst[p+'Taxable'] += txv; }
+      if(l.tax_kind === 'sgst') voucherGst[p+'Sgst'] += amt;
+      if(l.tax_kind === 'igst') voucherGst[p+'Taxable'] += txv;
+    });
+  });
+  Object.keys(voucherGst).forEach(k=> voucherGst[k] = Math.round(voucherGst[k]*100)/100);
+
+  // Fold voucher-level GST into the 3B figures
+  outward.txval = round2(outward.txval + voucherGst.outputTaxable);
+  outward.iamt  = round2(outward.iamt  + voucherGst.outputIgst);
+  outward.camt  = round2(outward.camt  + voucherGst.outputCgst);
+  outward.samt  = round2(outward.samt  + voucherGst.outputSgst);
+  itc.txval = round2(itc.txval + voucherGst.inputTaxable);
+  itc.iamt  = round2(itc.iamt  + voucherGst.inputIgst);
+  itc.camt  = round2(itc.camt  + voucherGst.inputCgst);
+  itc.samt  = round2(itc.samt  + voucherGst.inputSgst);
+  netPayable.igst = round2(outward.iamt - itc.iamt);
+  netPayable.cgst = round2(outward.camt - itc.camt);
+  netPayable.sgst = round2(outward.samt - itc.samt);
+
+  // ---- TDS deducted this period (from voucher lines tagged as TDS) ----
+  const tdsRows = [];
+  (state.vouchers||[]).forEach(v=>{
+    const d = new Date(v.voucher_date);
+    if(d.getMonth()+1 !== month || d.getFullYear() !== year) return;
+    (v.voucher_lines||[]).forEach(l=>{
+      if(l.tax_kind !== 'tds') return;
+      tdsRows.push({
+        date: v.voucher_date,
+        narration: v.narration || '',
+        taxable: parseFloat(l.taxable_value)||0,
+        rate: parseFloat(l.tax_rate)||0,
+        amount: parseFloat(l.amount)||0,
+      });
+    });
+  });
+  const tdsTotal = Math.round(tdsRows.reduce((s,r)=>s+r.amount,0)*100)/100;
+
   const unresolvedPos = Object.values(b2b).some(p=>p.inv.some(i=>!i.pos)) || Object.values(b2cs).some(x=>!x.pos);
 
   state.gstFilingData = {
     month, year, sales, purchases,
     b2b: Object.values(b2b), b2cs: Object.values(b2cs), hsn: Object.values(hsn),
-    outward, itc, netPayable, unresolvedPos,
+    outward, itc, netPayable, unresolvedPos, voucherGst, tdsRows, tdsTotal,
   };
   renderGstFilingResult(content);
 }
@@ -5138,14 +5378,39 @@ function renderGstFilingResult(content){
         <button class="form-btn" id="gf-r3b-json">{ } GSTR-3B JSON</button>
       </div>
     </div>
+    <div class="card">
+      <div class="card-title">TDS deducted — ${monthNames[g.month]} ${g.year}</div>
+      ${g.tdsRows.length===0 ? `<div style="padding:12px 4px;color:var(--muted);font-size:12.5px;">No TDS deducted this period.</div>` : `
+        <div class="table-header"><span style="width:95px;">Date</span><span style="flex:1;">Narration</span><span style="width:110px;text-align:right;">Taxable</span><span style="width:70px;text-align:right;">Rate</span><span style="width:110px;text-align:right;">TDS</span></div>
+        ${g.tdsRows.map(r=>`
+          <div class="table-row">
+            <span style="width:95px;">${r.date}</span>
+            <span style="flex:1;color:var(--muted);">${escapeHtml(r.narration||'—')}</span>
+            <span style="width:110px;text-align:right;">${fmtINR(r.taxable)}</span>
+            <span style="width:70px;text-align:right;color:var(--muted);">${r.rate}%</span>
+            <span style="width:110px;text-align:right;font-weight:700;">${fmtINR(r.amount)}</span>
+          </div>`).join("")}
+        <div class="totals-bar" style="border-top:2px solid var(--border2);"><div>Total TDS: <b>${fmtINR(g.tdsTotal)}</b></div></div>
+      `}
+      ${g.tdsRows.length ? `<button class="form-btn" id="gf-tds-excel" style="margin-top:10px;">📊 TDS Excel</button>` : ''}
+    </div>
+
     <div style="font-size:11px;color:var(--muted2);margin-top:6px;">
-      Sourced only from invoices created in the Invoicing module — GST entered manually via Voucher Entry's "+GST" panel isn't included. These files follow the standard GSTN offline-utility field layout, but always run them through "Prepare Offline → Upload" and check the portal-generated summary before filing, same as you would with output from Tally or any other software.
+      Includes both Invoicing-module invoices and Voucher Entry lines where the ledger carried its own GST/TDS setup — GST entered manually via Voucher Entry's "+GST" panel isn't included. These files follow the standard GSTN offline-utility field layout, but always run them through "Prepare Offline → Upload" and check the portal-generated summary before filing, same as you would with output from Tally or any other software.
     </div>
   `;
   document.getElementById("gf-r1-excel").addEventListener("click", ()=> exportGstr1Excel(g));
   document.getElementById("gf-r1-json").addEventListener("click", ()=> exportGstr1Json(g));
   document.getElementById("gf-r3b-excel").addEventListener("click", ()=> exportGstr3bExcel(g));
   document.getElementById("gf-r3b-json").addEventListener("click", ()=> exportGstr3bJson(g));
+  const tdsBtn = document.getElementById("gf-tds-excel");
+  if(tdsBtn) tdsBtn.addEventListener("click", ()=>{
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(g.tdsRows.map(r=>({
+      Date: r.date, Narration: r.narration, "Taxable Value": r.taxable, "Rate %": r.rate, "TDS Amount": r.amount,
+    }))), "TDS");
+    XLSX.writeFile(wb, `TDS_${g.year}-${String(g.month).padStart(2,'0')}.xlsx`);
+  });
 }
 
 function exportGstr1Excel(g){
