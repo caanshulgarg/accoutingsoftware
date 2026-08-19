@@ -1350,7 +1350,9 @@ function renderEntry(content){
       <div id="shortcuts-panel" style="display:${state.showShortcuts?'flex':'none'};flex-wrap:wrap;gap:14px;background:#eef2f8;border:1px solid #c7d7ee;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:11.5px;color:#475569;">
         <span><b>F4</b> Contra</span><span><b>F5</b> Payment</span><span><b>F6</b> Receipt</span>
         <span><b>F7</b> Journal</span><span><b>F8</b> Sales</span><span><b>F9</b> Purchase</span>
-        <span><b>Type</b> to search ledgers</span><span><b>↑↓</b> pick</span><span><b>Enter</b> select / next field</span><span><b>Alt+C</b> save entry</span><span><b>Esc</b> close list</span>
+        <span><b>Type</b> to search ledgers</span><span><b>↑↓</b> pick</span><span><b>Enter</b> select / next field</span>
+        <span><b>Alt+G</b> GST</span><span><b>Alt+T</b> TDS</span><span><b>Alt+I</b> Stock item</span>
+        <span><b>Alt+C</b> save entry</span><span><b>Esc</b> close panel / clear</span>
       </div>
 
       <div class="line-header">
@@ -1376,13 +1378,13 @@ function renderEntry(content){
       <div class="row" style="margin-top:8px;gap:8px;">
         <button class="small-btn" id="add-debit">+ Debit line</button>
         <button class="small-btn" id="add-credit">+ Credit line</button>
-        <button class="small-btn" id="gst-toggle" style="margin-left:auto;">+ GST</button>
-        <button class="small-btn" id="tds-toggle">+ TDS</button>
-        <button class="small-btn" id="stock-toggle">+ Stock Item</button>
+        <button class="small-btn" id="gst-toggle" style="margin-left:auto;">+ GST <span style="opacity:.6;">Alt+G</span></button>
+        <button class="small-btn" id="tds-toggle">+ TDS <span style="opacity:.6;">Alt+T</span></button>
+        <button class="small-btn" id="stock-toggle">+ Stock <span style="opacity:.6;">Alt+I</span></button>
       </div>
 
       <div id="gst-panel" style="display:${state.showGstPanel?'flex':'none'};flex-wrap:wrap;gap:10px;align-items:flex-end;background:#eef2f8;border:1px solid #c7d7ee;border-radius:8px;padding:12px 14px;margin-top:10px;">
-        <div class="field"><label>Taxable value</label><input class="form-input" id="gst-taxable" type="number" placeholder="0.00" style="width:130px;" value="${state.gstDraft?.taxable||''}" /></div>
+        <div class="field"><label>Taxable value</label><input class="form-input" id="gst-taxable" type="number" placeholder="0.00" style="width:130px;" value="${state.gstDraft?.taxable ?? (voucherTaxableBase()||'')}" /></div>
         <div class="field"><label>GST rate</label>
           <select class="form-input" id="gst-rate" style="width:230px;">
             ${GST_RATES.map(g=>`<option value="${g.rate}" ${state.gstDraft?.rate===g.rate?'selected':''}>${g.label}</option>`).join("")}
@@ -1405,7 +1407,7 @@ function renderEntry(content){
       </div>
 
       <div id="tds-panel" style="display:${state.showTdsPanel?'flex':'none'};flex-wrap:wrap;gap:10px;align-items:flex-end;background:#eef2f8;border:1px solid #c7d7ee;border-radius:8px;padding:12px 14px;margin-top:10px;">
-        <div class="field"><label>Expense / payment amount</label><input class="form-input" id="tds-amount" type="number" placeholder="0.00" style="width:150px;" value="${state.tdsDraft?.amount||''}" /></div>
+        <div class="field"><label>Expense / payment amount</label><input class="form-input" id="tds-amount" type="number" placeholder="0.00" style="width:150px;" value="${state.tdsDraft?.amount ?? (voucherTaxableBase()||'')}" /></div>
         <div class="field"><label>TDS section</label>
           <select class="form-input" id="tds-section" style="width:260px;">
             ${TDS_SECTIONS.map(s=>`<option value="${s.code}" ${state.tdsDraft?.section===s.code?'selected':''}>${s.label} (${s.rate}%)</option>`).join("")}
@@ -1521,10 +1523,27 @@ function renderEntry(content){
     };
 
     const selectLedger = (acc)=>{
-      updateDraftLine(id, { accountId: acc.id });
+      const patch = { accountId: acc.id };
+
+      // Tally behaviour: picking a GST ledger auto-computes its amount from the
+      // taxable value already on the voucher, so you just press Enter through it.
+      const kind = gstLedgerKind(acc);
+      if(kind && !amtInput.value){
+        const base = voucherTaxableBase();
+        const rate = state.lastGstRate || 18;
+        if(base > 0){
+          const full = Math.round(base * rate) / 100;
+          const amt = (kind === "igst") ? full : Math.round(full * 50) / 100; // CGST/SGST split the rate
+          patch.amount = amt.toFixed(2);
+          amtInput.value = patch.amount;
+        }
+      }
+
+      updateDraftLine(id, patch);
       accInput.value = acc.name;
       closeDropdown();
       amtInput.focus();
+      amtInput.select();
     };
 
     const wirePicks = ()=>{
@@ -1647,8 +1666,16 @@ function renderEntry(content){
     [taxableEl, rateEl, supplyEl, directionEl].forEach(el=>{
       el.addEventListener("input", captureGstDraft);
       el.addEventListener("change", captureGstDraft);
+      // Enter anywhere in the panel applies it — never need the mouse
+      el.addEventListener("keydown", e=>{
+        if(e.key === "Enter"){ e.preventDefault(); e.stopPropagation(); applyGstLines(content); }
+      });
     });
     document.getElementById("gst-apply-btn").addEventListener("click", ()=> applyGstLines(content));
+    if(state.focusPanel === "gst"){
+      state.focusPanel = null;
+      setTimeout(()=>{ taxableEl.focus(); taxableEl.select(); }, 20);
+    }
   }
   if(state.showTdsPanel){
     const amtEl = document.getElementById("tds-amount");
@@ -1660,11 +1687,18 @@ function renderEntry(content){
       rateEl.value = sec ? sec.rate : "";
       captureTdsDraft();
     });
-    [amtEl, rateEl, dirEl].forEach(el=>{
+    [amtEl, rateEl, dirEl, secEl].forEach(el=>{
       el.addEventListener("input", captureTdsDraft);
       el.addEventListener("change", captureTdsDraft);
+      el.addEventListener("keydown", e=>{
+        if(e.key === "Enter"){ e.preventDefault(); e.stopPropagation(); applyTdsLine(content); }
+      });
     });
     document.getElementById("tds-apply-btn").addEventListener("click", ()=> applyTdsLine(content));
+    if(state.focusPanel === "tds"){
+      state.focusPanel = null;
+      setTimeout(()=>{ amtEl.focus(); amtEl.select(); }, 20);
+    }
   }
   if(state.showStockPanel){
     const itemEl = document.getElementById("stock-item");
@@ -1678,6 +1712,15 @@ function renderEntry(content){
       el.addEventListener("change", captureStockDraft);
     });
     document.getElementById("stock-apply-btn").addEventListener("click", ()=> applyStockLine(content));
+    [itemEl, godownEl, qtyEl, rateEl, dirEl, ledgerEl].forEach(el=>{
+      el.addEventListener("keydown", e=>{
+        if(e.key === "Enter"){ e.preventDefault(); e.stopPropagation(); applyStockLine(content); }
+      });
+    });
+    if(state.focusPanel === "stock"){
+      state.focusPanel = null;
+      setTimeout(()=> itemEl.focus(), 20);
+    }
     content.querySelectorAll("[data-remove-stock]").forEach(el=>{
       el.addEventListener("click", ()=>{
         state.pendingStockLines.splice(parseInt(el.dataset.removeStock,10), 1);
@@ -1761,14 +1804,69 @@ function bindGlobalShortcuts(){
       submitVoucher(content);
       return;
     }
+    // Alt+G / Alt+T / Alt+I open the GST, TDS and Stock panels with focus already
+    // in the first field — no mouse needed at any point.
+    if(e.altKey && (e.key === "g" || e.key === "G")){
+      e.preventDefault();
+      state.showGstPanel = true; state.showTdsPanel = false; state.showStockPanel = false;
+      state.focusPanel = "gst";
+      renderEntry(content);
+      return;
+    }
+    if(e.altKey && (e.key === "t" || e.key === "T")){
+      e.preventDefault();
+      state.showTdsPanel = true; state.showGstPanel = false; state.showStockPanel = false;
+      state.focusPanel = "tds";
+      renderEntry(content);
+      return;
+    }
+    if(e.altKey && (e.key === "i" || e.key === "I")){
+      e.preventDefault();
+      state.showStockPanel = true; state.showGstPanel = false; state.showTdsPanel = false;
+      state.focusPanel = "stock";
+      ensureInventoryLoaded().then(()=> renderEntry(content));
+      return;
+    }
     if(e.key === "Escape"){
-      // Only clear if focus is somewhere inside the entry form
+      // If a helper panel is open, Esc just closes it rather than clearing the form
+      if(state.showGstPanel || state.showTdsPanel || state.showStockPanel){
+        e.preventDefault();
+        state.showGstPanel = state.showTdsPanel = state.showStockPanel = false;
+        renderEntry(content);
+        return;
+      }
       if(content.contains(document.activeElement)){
         e.preventDefault();
         resetEntryDraft(content);
       }
     }
   });
+}
+
+// Net taxable base already entered on this voucher — the sum of income/expense
+// lines (sales, purchases, services), ignoring tax and party lines. Used to
+// pre-fill the GST/TDS panels so you don't retype a figure that's on screen.
+function voucherTaxableBase(){
+  let base = 0;
+  state.voucherLines.forEach(l=>{
+    if(!l.accountId) return;
+    const acc = state.coa.find(a=>a.id===l.accountId);
+    if(!acc) return;
+    if(acc.account_group === "income" || acc.account_group === "expense"){
+      base += parseFloat(l.amount) || 0;
+    }
+  });
+  return Math.round(base*100)/100;
+}
+
+// True if this ledger is a GST tax ledger, and which flavour.
+function gstLedgerKind(acc){
+  if(!acc) return null;
+  const n = acc.name.toLowerCase();
+  if(/\bigst\b/.test(n)) return "igst";
+  if(/\bcgst\b/.test(n)) return "cgst";
+  if(/\bsgst\b|\butgst\b/.test(n)) return "sgst";
+  return null;
 }
 function captureGstDraft(){
   state.gstDraft = {
@@ -1834,6 +1932,7 @@ async function applyGstLines(content){
   const taxable = parseFloat(g.taxable);
   if(!taxable || taxable<=0){ showToast("Enter a valid taxable value", "err"); return; }
   const rate = g.rate;
+  state.lastGstRate = rate;   // remembered, so direct GST-ledger picks auto-fill at the same rate
   const totalTax = Math.round(taxable * rate) / 100;
   const isSale = g.direction === "output";
   const lineType = isSale ? "credit" : "debit"; // output tax is a liability (credit); input tax (ITC) is an asset (debit)
@@ -1856,6 +1955,7 @@ async function applyGstLines(content){
   showToast(`GST ${rate}% added on ${fmtINR(taxable)}`);
   state.showGstPanel = false;
   state.gstDraft = null;
+  state.focusLastLine = true;
   renderEntry(content);
 }
 
@@ -1885,6 +1985,7 @@ async function applyTdsLine(content){
   }
   state.showTdsPanel = false;
   state.tdsDraft = null;
+  state.focusLastLine = true;
   renderEntry(content);
 }
 
