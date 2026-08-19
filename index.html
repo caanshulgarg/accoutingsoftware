@@ -412,6 +412,10 @@ let state = {
   gstFilingMonth: null,
   gstFilingYear: null,
   gstFilingData: null,     // computed GSTR-1/3B data for the selected period
+  accountGroups: [],
+  _groupsLoadedFor: null,
+  coaTab: 'tree',
+  coaExpanded: {},
 };
 
 const MODULES = [
@@ -468,9 +472,36 @@ async function loadCompanies(){
 async function createCompany(name, type){
   const { data, error } = await supa.from("companies").insert({ name, type }).select().single();
   if(error){ showToast("Error: " + error.message, "err"); return null; }
-  // seed default chart of accounts
-  const seed = DEFAULT_COA.map(([n,g]) => ({ company_id: data.id, name: n, account_group: g }));
-  await supa.from("accounts").insert(seed);
+
+  // Seed the 28 predefined Tally-style account groups for this company
+  const { error: grpErr } = await supa.rpc("seed_account_groups", { p_company_id: data.id });
+  if(grpErr) showToast("Company created, but group seeding failed: " + grpErr.message, "err");
+
+  // Seed a starter set of ledgers, each attached to its proper group
+  const groups = await loadAccountGroups(data.id);
+  const findGroup = (n)=> (groups.find(g=>g.name.toLowerCase()===n.toLowerCase())||{}).id || null;
+  const starter = [
+    ["Cash",                 "Cash-in-Hand",       "asset"],
+    ["Bank Account",         "Bank Accounts",      "asset"],
+    ["Sundry Debtors",       "Sundry Debtors",     "asset"],
+    ["Sundry Creditors",     "Sundry Creditors",   "liability"],
+    ["Capital Account",      "Capital Account",    "liability"],
+    ["Sales / Revenue",      "Sales Accounts",     "income"],
+    ["Purchases",            "Purchase Accounts",  "expense"],
+    ["Salary & Wages",       "Indirect Expenses",  "expense"],
+    ["Rent Expense",         "Indirect Expenses",  "expense"],
+    ["Office Expenses",      "Indirect Expenses",  "expense"],
+    ["CGST Output",          "Duties & Taxes",     "liability"],
+    ["SGST Output",          "Duties & Taxes",     "liability"],
+    ["IGST Output",          "Duties & Taxes",     "liability"],
+    ["CGST Input",           "Duties & Taxes",     "asset"],
+    ["SGST Input",           "Duties & Taxes",     "asset"],
+    ["IGST Input",           "Duties & Taxes",     "asset"],
+    ["TDS Payable",          "Duties & Taxes",     "liability"],
+  ].map(([n, groupName, nature]) => ({
+    company_id: data.id, name: n, account_group: nature, group_id: findGroup(groupName),
+  }));
+  await supa.from("accounts").insert(starter);
   return data;
 }
 async function deleteCompany(id){
@@ -479,12 +510,30 @@ async function deleteCompany(id){
   return true;
 }
 async function loadAccounts(companyId){
-  const { data, error } = await supa.from("accounts").select("*").eq("company_id", companyId).order("account_group");
+  const { data, error } = await supa.from("accounts").select("*").eq("company_id", companyId).order("name");
   if(error){ showToast("Error loading accounts: " + error.message, "err"); return []; }
   return data;
 }
-async function createAccount(companyId, name, group){
-  const { data, error } = await supa.from("accounts").insert({ company_id: companyId, name, account_group: group }).select().single();
+async function loadAccountGroups(companyId){
+  const { data, error } = await supa.from("account_groups").select("*").eq("company_id", companyId).order("name");
+  if(error){ showToast("Error loading account groups: " + error.message, "err"); return []; }
+  return data;
+}
+async function createAccountGroup(companyId, fields){
+  const { data, error } = await supa.from("account_groups").insert({ company_id: companyId, ...fields }).select().single();
+  if(error){ showToast("Error: " + error.message, "err"); return null; }
+  return data;
+}
+async function deleteAccountGroup(id){
+  const { error } = await supa.from("account_groups").delete().eq("id", id);
+  if(error){ showToast("Can't delete — group has ledgers or sub-groups under it", "err"); return false; }
+  return true;
+}
+// Full-signature ledger creation. `group` is the legacy nature string kept for
+// backward compatibility with existing callers (ensureAccount, bulk import).
+async function createAccount(companyId, name, group, extra){
+  const payload = { company_id: companyId, name, account_group: group, ...(extra||{}) };
+  const { data, error } = await supa.from("accounts").insert(payload).select().single();
   if(error){ showToast("Error: " + error.message, "err"); return null; }
   return data;
 }
@@ -628,8 +677,10 @@ async function selectCompany(id){
   renderMain();
 }
 async function refreshCompanyData(){
-  if(!state.activeCompanyId){ state.coa=[]; state.vouchers=[]; return; }
+  if(!state.activeCompanyId){ state.coa=[]; state.vouchers=[]; state.accountGroups=[]; return; }
   state.coa = await loadAccounts(state.activeCompanyId);
+  state.accountGroups = await loadAccountGroups(state.activeCompanyId);
+  state._groupsLoadedFor = state.activeCompanyId;
   state.vouchers = await loadVouchers(state.activeCompanyId);
   state.bankAccountId = null;
   state.bankLines = [];
@@ -638,6 +689,7 @@ async function refreshCompanyData(){
   state._inventoryLoadedFor = null;
   state.parties = []; state.invoices = [];
   state._invoicingLoadedFor = null;
+
   state.employees = []; state.payrollRuns = [];
   state._payrollLoadedFor = null;
 }
@@ -696,47 +748,228 @@ function renderMain(){
   else if(state.tab === "gst_filing") renderGstFiling(content);
 }
 
-function renderCOA(content){
-  const grouped = ACCOUNT_GROUPS.map(g => ({...g, accounts: state.coa.filter(a=>a.account_group===g.id)}));
-  content.innerHTML = `
-    <div class="card">
-      <div class="card-title">Create ledger account</div>
-      <div class="row">
-        <input class="form-input" id="new-acc-name" placeholder="Account name" style="flex:1;" />
-        <select class="form-input" id="new-acc-group" style="width:180px;">
-          ${ACCOUNT_GROUPS.map(g=>`<option value="${g.id}">${g.label}</option>`).join("")}
-        </select>
-        <button class="form-btn" id="new-acc-btn" style="white-space:nowrap;">+ Add</button>
+async function renderCOA(content){
+  content.innerHTML = `<div style="padding:24px;color:var(--muted);">Loading chart of accounts…</div>`;
+  if(!state.accountGroups || state._groupsLoadedFor !== state.activeCompanyId){
+    state.accountGroups = await loadAccountGroups(state.activeCompanyId);
+    state._groupsLoadedFor = state.activeCompanyId;
+  }
+  renderCOABody(content);
+}
+
+// Builds a nested tree: primary groups -> sub-groups -> ledgers
+function buildCOATree(){
+  const groups = state.accountGroups || [];
+  const byParent = {};
+  groups.forEach(g=>{
+    const key = g.parent_id || "__root__";
+    (byParent[key] = byParent[key] || []).push(g);
+  });
+  const ledgersByGroup = {};
+  state.coa.forEach(a=>{
+    const key = a.group_id || "__ungrouped__";
+    (ledgersByGroup[key] = ledgersByGroup[key] || []).push(a);
+  });
+  return { byParent, ledgersByGroup };
+}
+
+function renderCOABody(content){
+  const canWrite = canEdit("coa");
+  const { byParent, ledgersByGroup } = buildCOATree();
+  const groups = state.accountGroups || [];
+  state.coaExpanded = state.coaExpanded || {};
+
+  const natureLabel = { asset:"Asset", liability:"Liability", income:"Income", expense:"Expense" };
+  const natureColor = { asset:"#1d4ed8", liability:"#b45309", income:"#15803d", expense:"#b91c1c" };
+
+  // Flat, indented list of all groups for the parent/group dropdowns
+  const groupOptions = (selectedId, excludeId)=>{
+    const out = [];
+    const walk = (parentId, depth)=>{
+      (byParent[parentId || "__root__"]||[])
+        .sort((a,b)=>a.name.localeCompare(b.name))
+        .forEach(g=>{
+          if(g.id === excludeId) return;
+          const pad = "&nbsp;".repeat(depth*4);
+          out.push(`<option value="${g.id}" ${selectedId===g.id?'selected':''}>${pad}${escapeHtml(g.name)}</option>`);
+          walk(g.id, depth+1);
+        });
+    };
+    walk(null, 0);
+    return out.join("");
+  };
+
+  const renderGroup = (g, depth)=>{
+    const children = (byParent[g.id]||[]).sort((a,b)=>a.name.localeCompare(b.name));
+    const ledgers = (ledgersByGroup[g.id]||[]).sort((a,b)=>a.name.localeCompare(b.name));
+    const key = "g_"+g.id;
+    const isOpen = state.coaExpanded[key] !== false; // default open
+    const hasChildren = children.length || ledgers.length;
+    return `
+      <div style="margin-left:${depth*18}px;">
+        <div class="account-row" style="padding:7px 4px;">
+          <span style="display:flex;align-items:center;gap:7px;flex:1;min-width:0;">
+            <span data-toggle="${key}" style="cursor:pointer;width:14px;display:inline-block;color:var(--muted2);font-size:11px;">${hasChildren ? (isOpen?"▼":"▶") : "·"}</span>
+            <b style="font-size:12.5px;">${escapeHtml(g.name)}</b>
+            ${g.alias?`<span style="font-size:11px;color:var(--muted2);">(${escapeHtml(g.alias)})</span>`:''}
+            <span class="match-badge" style="background:#eef2f8;color:${natureColor[g.nature]};">${natureLabel[g.nature]}</span>
+            ${g.is_system?'<span style="font-size:10px;color:var(--muted2);">predefined</span>':''}
+            <span style="font-size:11px;color:var(--muted2);">${ledgers.length?ledgers.length+" ledger"+(ledgers.length>1?"s":""):""}</span>
+          </span>
+          ${canWrite && !g.is_system ? `<button class="icon-btn" data-del-group="${g.id}" title="Delete group">✕</button>` : ''}
+        </div>
+        ${isOpen ? `
+          ${children.map(ch=>renderGroup(ch, depth+1)).join("")}
+          ${ledgers.map(a=>`
+            <div class="account-row" style="margin-left:${(depth+1)*18}px;padding:6px 4px;">
+              <span style="flex:1;font-size:12.5px;">
+                ${escapeHtml(a.name)}
+                ${a.alias?`<span style="color:var(--muted2);font-size:11px;"> (${escapeHtml(a.alias)})</span>`:''}
+                ${parseFloat(a.opening_balance)>0?`<span style="color:var(--muted);font-size:11px;"> — Op: ${fmtINR(a.opening_balance)} ${a.opening_balance_type==='credit'?'Cr':'Dr'}</span>`:''}
+              </span>
+              ${canWrite ? `<button class="icon-btn" data-del-acc="${a.id}" title="Delete ledger">✕</button>` : ''}
+            </div>
+          `).join("")}
+        ` : ''}
       </div>
+    `;
+  };
+
+  const roots = (byParent["__root__"]||[]).sort((a,b)=>a.name.localeCompare(b.name));
+  const ungrouped = ledgersByGroup["__ungrouped__"]||[];
+
+  content.innerHTML = `
+    <div class="recon-tabs">
+      <button class="recon-tab ${state.coaTab!=='groups'?'active':''}" data-coatab="tree">Chart of Accounts</button>
+      <button class="recon-tab ${state.coaTab==='groups'?'active':''}" data-coatab="groups">Manage Groups</button>
     </div>
-    <div class="grid-coa">
-      ${grouped.map(g => `
-        <div class="card">
-          <div class="group-title">${g.label} (${g.accounts.length})</div>
-          ${g.accounts.length===0 ? `<div style="font-size:12px;color:var(--muted2)">No accounts</div>` : ""}
-          ${g.accounts.map(a=>`
-            <div class="account-row">
-              <span>${escapeHtml(a.name)}</span>
-              ${canEdit("coa") ? `<button class="icon-btn" data-del-acc="${a.id}" title="Delete">✕</button>` : ""}
+
+    ${state.coaTab==='groups' ? `
+      <div class="card">
+        <div class="card-title">Create group / sub-group</div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;">
+          <input class="form-input" id="ng-name" placeholder="Group name" style="flex:1;min-width:170px;" />
+          <input class="form-input" id="ng-alias" placeholder="Alias (optional)" style="width:150px;" />
+          <select class="form-input" id="ng-parent" style="width:230px;">
+            <option value="">— Primary group (no parent) —</option>
+            ${groupOptions(null, null)}
+          </select>
+          <select class="form-input" id="ng-nature" style="width:150px;">
+            <option value="asset">Asset</option>
+            <option value="liability">Liability</option>
+            <option value="income">Income</option>
+            <option value="expense">Expense</option>
+          </select>
+          <button class="form-btn" id="ng-add-btn">+ Add group</button>
+        </div>
+        <div style="font-size:11px;color:var(--muted2);margin-top:8px;">Pick a parent to create a sub-group under it. Nature decides whether the group rolls into the Balance Sheet or P&amp;L; sub-groups usually match their parent's nature.</div>
+      </div>
+    ` : `
+      <div class="card">
+        <div class="card-title">Create ledger</div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;">
+          <input class="form-input" id="new-acc-name" placeholder="Ledger name" style="flex:1;min-width:170px;" />
+          <input class="form-input" id="new-acc-alias" placeholder="Alias (optional)" style="width:150px;" />
+          <select class="form-input" id="new-acc-group" style="width:250px;">
+            <option value="">Select group…</option>
+            ${groupOptions(null, null)}
+          </select>
+          <input class="form-input" id="new-acc-ob" type="number" placeholder="Opening bal." style="width:130px;" />
+          <select class="form-input" id="new-acc-obtype" style="width:80px;">
+            <option value="debit">Dr</option>
+            <option value="credit">Cr</option>
+          </select>
+          <button class="form-btn" id="new-acc-btn">+ Add</button>
+        </div>
+      </div>
+    `}
+
+    <div class="card">
+      ${roots.length===0 ? `<div style="padding:14px;color:var(--muted);font-size:13px;">No groups found. Re-run schema.sql in Supabase — it seeds the 28 standard groups automatically.</div>` : ''}
+      ${roots.map(g=>renderGroup(g, 0)).join("")}
+      ${ungrouped.length ? `
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+          <div style="font-size:12px;font-weight:700;color:var(--err);margin-bottom:6px;">Ungrouped ledgers (${ungrouped.length})</div>
+          <div style="font-size:11px;color:var(--muted2);margin-bottom:8px;">These aren't under any group yet — re-run schema.sql to auto-assign them, or delete and recreate under the right group.</div>
+          ${ungrouped.map(a=>`
+            <div class="account-row" style="padding:6px 4px;">
+              <span style="flex:1;font-size:12.5px;">${escapeHtml(a.name)}</span>
+              ${canWrite ? `<button class="icon-btn" data-del-acc="${a.id}">✕</button>` : ''}
             </div>
           `).join("")}
         </div>
-      `).join("")}
+      ` : ''}
     </div>
   `;
-  document.getElementById("new-acc-btn").addEventListener("click", async ()=>{
-    if(!canEdit("coa")){ showToast("You don't have edit access to Chart of Accounts", "err"); return; }
-    const name = document.getElementById("new-acc-name").value.trim();
-    const group = document.getElementById("new-acc-group").value;
-    if(!name) return;
-    const acc = await createAccount(state.activeCompanyId, name, group);
-    if(acc){ state.coa.push(acc); showToast(`Ledger "${name}" created`); renderCOA(content); }
+
+  content.querySelectorAll("[data-coatab]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      state.coaTab = btn.dataset.coatab === 'groups' ? 'groups' : 'tree';
+      renderCOABody(content);
+    });
   });
+  content.querySelectorAll("[data-toggle]").forEach(el=>{
+    el.addEventListener("click", ()=>{
+      const k = el.dataset.toggle;
+      state.coaExpanded[k] = state.coaExpanded[k] === false ? true : false;
+      renderCOABody(content);
+    });
+  });
+
+  if(canWrite && state.coaTab === 'groups'){
+    document.getElementById("ng-add-btn").addEventListener("click", async ()=>{
+      const name = document.getElementById("ng-name").value.trim();
+      if(!name){ showToast("Enter a group name", "err"); return; }
+      const parentId = document.getElementById("ng-parent").value || null;
+      let nature = document.getElementById("ng-nature").value;
+      if(parentId){
+        const parent = state.accountGroups.find(g=>g.id===parentId);
+        if(parent) nature = parent.nature; // sub-groups inherit their parent's nature
+      }
+      const created = await createAccountGroup(state.activeCompanyId, {
+        name, alias: document.getElementById("ng-alias").value.trim() || null,
+        parent_id: parentId, nature, is_system: false,
+      });
+      if(created){
+        state.accountGroups.push(created);
+        showToast(`Group "${name}" created`);
+        renderCOABody(content);
+      }
+    });
+  }
+  if(canWrite && state.coaTab !== 'groups'){
+    document.getElementById("new-acc-btn").addEventListener("click", async ()=>{
+      const name = document.getElementById("new-acc-name").value.trim();
+      const groupId = document.getElementById("new-acc-group").value;
+      if(!name){ showToast("Enter a ledger name", "err"); return; }
+      if(!groupId){ showToast("Select which group this ledger belongs to", "err"); return; }
+      const grp = state.accountGroups.find(g=>g.id===groupId);
+      const acc = await createAccount(state.activeCompanyId, name, grp.nature, {
+        group_id: groupId,
+        alias: document.getElementById("new-acc-alias").value.trim() || null,
+        opening_balance: parseFloat(document.getElementById("new-acc-ob").value) || 0,
+        opening_balance_type: document.getElementById("new-acc-obtype").value,
+      });
+      if(acc){
+        state.coa.push(acc);
+        showToast(`Ledger "${name}" created`);
+        renderCOABody(content);
+      }
+    });
+  }
+
   content.querySelectorAll("[data-del-acc]").forEach(el=>{
     el.addEventListener("click", async ()=>{
       if(!canEdit("coa")){ showToast("You don't have edit access to Chart of Accounts", "err"); return; }
       const ok = await deleteAccount(el.dataset.delAcc);
-      if(ok){ state.coa = state.coa.filter(a=>a.id!==el.dataset.delAcc); renderCOA(content); }
+      if(ok){ state.coa = state.coa.filter(a=>a.id!==el.dataset.delAcc); renderCOABody(content); }
+    });
+  });
+  content.querySelectorAll("[data-del-group]").forEach(el=>{
+    el.addEventListener("click", async ()=>{
+      if(!canEdit("coa")){ showToast("You don't have edit access to Chart of Accounts", "err"); return; }
+      const ok = await deleteAccountGroup(el.dataset.delGroup);
+      if(ok){ state.accountGroups = state.accountGroups.filter(g=>g.id!==el.dataset.delGroup); renderCOABody(content); }
     });
   });
 }
@@ -748,7 +981,22 @@ function renderEntry(content){
       { id: uid("ln"), accountId: "", type: "credit", amount: "" },
     ];
   }
-  const accOptions = acc => `<option value="">Select account…</option>` + state.coa.map(a=>`<option value="${a.id}" ${acc===a.id?'selected':''}>${escapeHtml(a.name)}</option>`).join("");
+  // Ledger dropdown grouped by account group, with alias shown for searchability
+  const accOptions = acc => {
+    const byGroup = {};
+    state.coa.forEach(a=>{
+      const g = (state.accountGroups||[]).find(x=>x.id===a.group_id);
+      const label = g ? g.name : "Ungrouped";
+      (byGroup[label] = byGroup[label] || []).push(a);
+    });
+    const opts = Object.keys(byGroup).sort().map(label=>{
+      const items = byGroup[label].sort((x,y)=>x.name.localeCompare(y.name)).map(a=>
+        `<option value="${a.id}" ${acc===a.id?'selected':''}>${escapeHtml(a.name)}${a.alias?` (${escapeHtml(a.alias)})`:''}</option>`
+      ).join("");
+      return `<optgroup label="${escapeHtml(label)}">${items}</optgroup>`;
+    }).join("");
+    return `<option value="">Select account…</option>` + opts;
+  };
 
   const totalDebit = state.voucherLines.filter(l=>l.type==="debit").reduce((s,l)=>s+(parseFloat(l.amount)||0),0);
   const totalCredit = state.voucherLines.filter(l=>l.type==="credit").reduce((s,l)=>s+(parseFloat(l.amount)||0),0);
