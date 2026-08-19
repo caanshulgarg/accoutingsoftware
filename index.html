@@ -51,9 +51,9 @@ window.__ensureLibs = async function(){
 </script>
 <style>
   :root{
-    --bg:#0b0c0f; --panel:#111318; --panel2:#181a20; --border:#1f2128; --border2:#262932;
-    --text:#e5e7eb; --muted:#8a8f98; --muted2:#5c6068; --accent:#3d8bfd; --accent2:#7c5cff;
-    --ok:#4ade80; --err:#f87171;
+    --bg:#f6f7f9; --panel:#ffffff; --panel2:#f0f2f5; --border:#e2e5ea; --border2:#d4d8df;
+    --text:#1a1d23; --muted:#6b7280; --muted2:#9aa1ab; --accent:#2563eb; --accent2:#7c5cff;
+    --ok:#16a34a; --err:#dc2626;
   }
   *{box-sizing:border-box;}
   body{margin:0;font-family:'Inter',ui-sans-serif,system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);}
@@ -68,24 +68,24 @@ window.__ensureLibs = async function(){
   .search-wrap input{background:transparent;border:none;outline:none;color:var(--text);font-size:12.5px;flex:1;}
   #company-list{max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;margin-bottom:8px;}
   .company-item{display:flex;align-items:center;gap:8px;padding:8px;border-radius:7px;cursor:pointer;}
-  .company-item.active{background:#1b2536;}
-  .company-item:hover{background:#161821;}
+  .company-item.active{background:#e4ecfa;}
+  .company-item:hover{background:#f0f2f5;}
   .company-dot{width:6px;height:6px;border-radius:4px;background:var(--muted2);flex-shrink:0;}
   .company-item.active .company-dot{background:var(--accent);}
   .company-name{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .company-type{font-size:10.5px;color:var(--muted);}
   .icon-btn{background:transparent;border:none;color:var(--muted2);cursor:pointer;padding:4px;display:flex;align-items:center;border-radius:5px;}
-  .icon-btn:hover{color:var(--err);background:#1a1c22;}
+  .icon-btn:hover{color:var(--err);background:var(--border);}
   #add-company-btn{display:flex;align-items:center;gap:6px;justify-content:center;background:var(--panel2);border:1px dashed var(--border2);color:var(--muted);font-size:12.5px;padding:8px;border-radius:8px;cursor:pointer;margin-bottom:10px;width:100%;}
   #add-company-form{display:none;flex-direction:column;gap:6px;background:var(--panel2);padding:10px;border-radius:8px;margin-bottom:10px;border:1px solid var(--border2);}
-  .form-input{background:#14161b;border:1px solid var(--border2);color:var(--text);font-size:12.5px;padding:7px 9px;border-radius:6px;outline:none;width:100%;}
+  .form-input{background:#ffffff;border:1px solid var(--border2);color:var(--text);font-size:12.5px;padding:7px 9px;border-radius:6px;outline:none;width:100%;}
   .form-btn{display:flex;align-items:center;justify-content:center;gap:5px;color:#fff;border:none;font-size:12.5px;font-weight:600;padding:8px 12px;border-radius:6px;cursor:pointer;background:var(--accent);}
-  .form-btn.secondary{background:#2a2d35;}
+  .form-btn.secondary{background:#e2e5ea;}
   .form-btn:disabled{opacity:.5;cursor:not-allowed;}
   #nav-list{display:flex;flex-direction:column;gap:2px;margin-top:4px;border-top:1px solid var(--border);padding-top:10px;}
-  .nav-item{display:flex;align-items:center;gap:9px;background:transparent;border:none;color:#c3c6cc;font-size:13px;padding:9px 10px;border-radius:7px;cursor:pointer;text-align:left;width:100%;}
-  .nav-item.active{background:#1b2536;color:#fff;}
-  .nav-item:hover:not(.active){background:#161821;}
+  .nav-item{display:flex;align-items:center;gap:9px;background:transparent;border:none;color:var(--text);font-size:13px;padding:9px 10px;border-radius:7px;cursor:pointer;text-align:left;width:100%;}
+  .nav-item.active{background:#e4ecfa;color:#fff;}
+  .nav-item:hover:not(.active){background:#f0f2f5;}
   #roadmap{margin-top:auto;padding-top:14px;border-top:1px solid var(--border);}
   .roadmap-title{font-size:10.5px;font-weight:700;color:var(--muted);letter-spacing:.04em;margin-bottom:6px;}
   .roadmap-item{font-size:11.5px;color:var(--muted2);padding:3px 2px;}
@@ -105,51 +105,51 @@ window.__ensureLibs = async function(){
   .field label{font-size:11px;color:var(--muted);font-weight:600;}
   .grid-coa{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;}
   .group-title{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;}
-  .account-row{display:flex;align-items:center;justify-content:space-between;padding:6px 4px;border-bottom:1px solid #1a1c22;font-size:13px;}
-  .line-header,.table-header{display:flex;gap:8px;font-size:10.5px;color:var(--muted2);font-weight:700;text-transform:uppercase;letter-spacing:.03em;padding:0 2px 6px;border-bottom:1px solid #1a1c22;margin-bottom:6px;}
+  .account-row{display:flex;align-items:center;justify-content:space-between;padding:6px 4px;border-bottom:1px solid var(--border);font-size:13px;}
+  .line-header,.table-header{display:flex;gap:8px;font-size:10.5px;color:var(--muted2);font-weight:700;text-transform:uppercase;letter-spacing:.03em;padding:0 2px 6px;border-bottom:1px solid var(--border);margin-bottom:6px;}
   .line-row,.table-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px 4px;}
-  .table-row{border-bottom:1px solid #16181d;}
-  .small-btn{display:flex;align-items:center;gap:4px;background:var(--panel2);border:1px solid var(--border2);color:#c3c6cc;font-size:11.5px;padding:6px 10px;border-radius:6px;cursor:pointer;}
-  .totals-bar{display:flex;gap:20px;margin-top:14px;padding-top:12px;border-top:1px solid #1a1c22;font-size:13px;}
+  .table-row{border-bottom:1px solid var(--border);}
+  .small-btn{display:flex;align-items:center;gap:4px;background:var(--panel2);border:1px solid var(--border2);color:var(--text);font-size:11.5px;padding:6px 10px;border-radius:6px;cursor:pointer;}
+  .totals-bar{display:flex;gap:20px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border);font-size:13px;}
   #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);display:none;align-items:center;gap:8px;color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.4);z-index:999;}
   ::-webkit-scrollbar{width:8px;height:8px;}
-  ::-webkit-scrollbar-thumb{background:#2a2d35;border-radius:4px;}
-  #config-banner{background:#3a2a0f;border:1px solid #6b4a12;color:#fbbf24;padding:10px 16px;font-size:12.5px;display:none;}
+  ::-webkit-scrollbar-thumb{background:#e2e5ea;border-radius:4px;}
+  #config-banner{background:#fef3c7;border:1px solid #fcd34d;color:#b45309;padding:10px 16px;font-size:12.5px;display:none;}
   #auth-screen,#pending-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;}
   #auth-card{width:340px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:26px;}
   #auth-tabs{display:flex;gap:6px;background:var(--panel2);border-radius:8px;padding:3px;margin-bottom:18px;}
   .auth-tab{flex:1;background:transparent;border:none;color:var(--muted);font-size:12.5px;font-weight:600;padding:8px;border-radius:6px;cursor:pointer;}
-  .auth-tab.active{background:#1b2536;color:#fff;}
-  #auth-error{display:none;background:#3a1414;border:1px solid #6b1e1e;color:#fca5a5;font-size:12px;padding:8px 10px;border-radius:6px;margin-bottom:12px;}
+  .auth-tab.active{background:#e4ecfa;color:#fff;}
+  #auth-error{display:none;background:#fee2e2;border:1px solid #b91c1c;color:#b91c1c;font-size:12px;padding:8px 10px;border-radius:6px;margin-bottom:12px;}
   #auth-hint{font-size:11px;color:var(--muted2);margin-top:14px;line-height:1.5;text-align:center;}
   #auth-name-field{display:none;}
   .role-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;text-transform:uppercase;letter-spacing:.03em;}
-  .role-super_admin{background:#3b2a5c;color:#c4b5fd;}
-  .role-admin{background:#1e3a5c;color:#93c5fd;}
-  .role-team_member{background:#1e3a2e;color:#86efac;}
-  .role-pending{background:#3a3214;color:#fbbf24;}
+  .role-super_admin{background:#ede9fe;color:#6d28d9;}
+  .role-admin{background:#dbeafe;color:#1d4ed8;}
+  .role-team_member{background:#dcfce7;color:#15803d;}
+  .role-pending{background:#fef3c7;color:#b45309;}
   .perm-grid{display:grid;grid-template-columns:120px repeat(6,1fr);gap:6px;align-items:center;font-size:12px;}
   .perm-grid .ph{font-size:10px;color:var(--muted2);font-weight:700;text-transform:uppercase;text-align:center;}
   .perm-cell{display:flex;gap:4px;justify-content:center;}
   .perm-cell button{width:24px;height:24px;border-radius:5px;border:1px solid var(--border2);background:var(--panel2);color:var(--muted2);cursor:pointer;font-size:11px;}
-  .perm-cell button.on{background:#1b2536;color:var(--accent);border-color:var(--accent);}
+  .perm-cell button.on{background:#e4ecfa;color:var(--accent);border-color:var(--accent);}
   #user-badge{display:flex;align-items:center;gap:8px;padding:8px;background:var(--panel2);border-radius:8px;margin-bottom:10px;font-size:12px;}
   .match-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap;}
-  .match-exact{background:#0f3a24;color:#4ade80;}
-  .match-partial{background:#3a3214;color:#fbbf24;}
-  .match-potential{background:#1e2f3a;color:#7dd3fc;}
-  .match-none{background:#2a2d35;color:var(--muted);}
+  .match-exact{background:#dcfce7;color:#15803d;}
+  .match-partial{background:#fef3c7;color:#b45309;}
+  .match-potential{background:#e0f2fe;color:#0369a1;}
+  .match-none{background:#e2e5ea;color:var(--muted);}
   .drop-zone{border:2px dashed var(--border2);border-radius:12px;padding:28px;text-align:center;color:var(--muted);cursor:pointer;transition:border-color .15s;}
   .drop-zone.drag{border-color:var(--accent);color:var(--accent);}
-  .recon-row{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid #16181d;font-size:12.5px;}
+  .recon-row{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--border);font-size:12.5px;}
   .recon-tabs{display:flex;gap:6px;background:var(--panel2);border-radius:8px;padding:3px;margin-bottom:14px;width:fit-content;}
   .recon-tab{background:transparent;border:none;color:var(--muted);font-size:12px;font-weight:600;padding:7px 14px;border-radius:6px;cursor:pointer;}
-  .recon-tab.active{background:#1b2536;color:#fff;}
+  .recon-tab.active{background:#e4ecfa;color:#fff;}
 </style>
 </head>
 <body>
 
-<div id="boot-screen" style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0c0f;color:#8a8f98;font-family:ui-sans-serif,system-ui;font-size:14px;">
+<div id="boot-screen" style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--muted);font-family:ui-sans-serif,system-ui;font-size:14px;">
   Loading Practice Suite…
 </div>
 
@@ -304,11 +304,11 @@ function initSupabaseClient(){
 // something fails before the normal screens can render.
 function showFatalError(title, detail){
   document.body.innerHTML = `
-    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0c0f;color:#e5e7eb;font-family:ui-sans-serif,system-ui;padding:20px;">
-      <div style="max-width:480px;background:#111318;border:1px solid #6b1e1e;border-radius:12px;padding:24px;">
-        <div style="font-size:16px;font-weight:700;color:#fca5a5;margin-bottom:8px;">⚠ ${title}</div>
-        <div style="font-size:13px;color:#c3c6cc;line-height:1.6;">${detail}</div>
-        <button onclick="location.reload()" style="margin-top:16px;background:#3d8bfd;border:none;color:#fff;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;">Reload page</button>
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui;padding:20px;">
+      <div style="max-width:480px;background:var(--panel);border:1px solid #b91c1c;border-radius:12px;padding:24px;">
+        <div style="font-size:16px;font-weight:700;color:#b91c1c;margin-bottom:8px;">⚠ ${title}</div>
+        <div style="font-size:13px;color:var(--text);line-height:1.6;">${detail}</div>
+        <button onclick="location.reload()" style="margin-top:16px;background:var(--accent);border:none;color:#fff;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;">Reload page</button>
       </div>
     </div>`;
 }
@@ -451,7 +451,7 @@ function todayISO(){ return new Date().toISOString().slice(0,10); }
 function showToast(msg, kind){
   const t = document.getElementById("toast");
   t.textContent = msg;
-  t.style.background = kind === "err" ? "#7f1d1d" : "#14532d";
+  t.style.background = kind === "err" ? "#dc2626" : "#16a34a";
   t.style.display = "flex";
   setTimeout(()=>{ t.style.display="none"; }, 2600);
 }
@@ -771,7 +771,7 @@ function renderEntry(content){
         </div>
         <button class="small-btn" id="shortcuts-toggle" style="align-self:flex-end;">⌨ Shortcuts</button>
       </div>
-      <div id="shortcuts-panel" style="display:${state.showShortcuts?'flex':'none'};flex-wrap:wrap;gap:14px;background:#0e1420;border:1px solid #1c2a3d;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:11.5px;color:#9bb0c9;">
+      <div id="shortcuts-panel" style="display:${state.showShortcuts?'flex':'none'};flex-wrap:wrap;gap:14px;background:#eef2f8;border:1px solid #c7d7ee;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:11.5px;color:#475569;">
         <span><b>F4</b> Contra</span><span><b>F5</b> Payment</span><span><b>F6</b> Receipt</span>
         <span><b>F7</b> Journal</span><span><b>F8</b> Sales</span><span><b>F9</b> Purchase</span>
         <span><b>Enter</b> next field / new line</span><span><b>Alt+C</b> save entry</span><span><b>Esc</b> clear form</span>
@@ -801,7 +801,7 @@ function renderEntry(content){
         <button class="small-btn" id="stock-toggle">+ Stock Item</button>
       </div>
 
-      <div id="gst-panel" style="display:${state.showGstPanel?'flex':'none'};flex-wrap:wrap;gap:10px;align-items:flex-end;background:#0e1420;border:1px solid #1c2a3d;border-radius:8px;padding:12px 14px;margin-top:10px;">
+      <div id="gst-panel" style="display:${state.showGstPanel?'flex':'none'};flex-wrap:wrap;gap:10px;align-items:flex-end;background:#eef2f8;border:1px solid #c7d7ee;border-radius:8px;padding:12px 14px;margin-top:10px;">
         <div class="field"><label>Taxable value</label><input class="form-input" id="gst-taxable" type="number" placeholder="0.00" style="width:130px;" value="${state.gstDraft?.taxable||''}" /></div>
         <div class="field"><label>GST rate</label>
           <select class="form-input" id="gst-rate" style="width:230px;">
@@ -824,7 +824,7 @@ function renderEntry(content){
         <div style="font-size:11px;color:var(--muted2);width:100%;">Adds separate CGST/SGST or IGST lines automatically using your Chart of Accounts GST ledgers (created automatically if missing).</div>
       </div>
 
-      <div id="tds-panel" style="display:${state.showTdsPanel?'flex':'none'};flex-wrap:wrap;gap:10px;align-items:flex-end;background:#0e1420;border:1px solid #1c2a3d;border-radius:8px;padding:12px 14px;margin-top:10px;">
+      <div id="tds-panel" style="display:${state.showTdsPanel?'flex':'none'};flex-wrap:wrap;gap:10px;align-items:flex-end;background:#eef2f8;border:1px solid #c7d7ee;border-radius:8px;padding:12px 14px;margin-top:10px;">
         <div class="field"><label>Expense / payment amount</label><input class="form-input" id="tds-amount" type="number" placeholder="0.00" style="width:150px;" value="${state.tdsDraft?.amount||''}" /></div>
         <div class="field"><label>TDS section</label>
           <select class="form-input" id="tds-section" style="width:260px;">
@@ -844,7 +844,7 @@ function renderEntry(content){
         <div style="font-size:11px;color:var(--muted2);width:100%;">"We deduct" reduces the net payment and books TDS Payable. "Deducted from our income" books TDS Receivable against the gross income.</div>
       </div>
 
-      <div id="stock-panel" style="display:${state.showStockPanel?'flex':'none'};flex-wrap:wrap;gap:10px;align-items:flex-end;background:#0e1420;border:1px solid #1c2a3d;border-radius:8px;padding:12px 14px;margin-top:10px;">
+      <div id="stock-panel" style="display:${state.showStockPanel?'flex':'none'};flex-wrap:wrap;gap:10px;align-items:flex-end;background:#eef2f8;border:1px solid #c7d7ee;border-radius:8px;padding:12px 14px;margin-top:10px;">
         <div class="field" style="min-width:180px;"><label>Stock item</label>
           <select class="form-input" id="stock-item">
             <option value="">Select item…</option>
@@ -876,7 +876,7 @@ function renderEntry(content){
         ${state.pendingStockLines && state.pendingStockLines.length ? `
           <div style="width:100%;margin-top:6px;">
             ${state.pendingStockLines.map((s,i)=>`
-              <div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);padding:4px 0;border-top:1px solid #1a1c22;">
+              <div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);padding:4px 0;border-top:1px solid var(--border);">
                 <span>${escapeHtml((state.stockItems.find(x=>x.id===s.stockItemId)||{}).name||'?')} — ${s.direction==='in'?'+':'-'}${s.qty} @ ${fmtINR(s.rate)}</span>
                 <button class="icon-btn" data-remove-stock="${i}" style="padding:0 4px;">✕</button>
               </div>
@@ -1247,7 +1247,7 @@ function renderLedger(content){
         <option value="all">All accounts</option>
         ${state.coa.map(a=>`<option value="${a.id}" ${state.ledgerFilter===a.id?'selected':''}>${escapeHtml(a.name)}</option>`).join("")}
       </select>
-      ${state.ledgerFilter!=="all" ? `<div style="font-size:13px;color:var(--muted)">Balance: <b style="color:${balance>=0?'#e5e7eb':'var(--err)'}">${fmtINR(balance)}</b> ${balance>=0?'Dr':'Cr'}</div>` : ""}
+      ${state.ledgerFilter!=="all" ? `<div style="font-size:13px;color:var(--muted)">Balance: <b style="color:${balance>=0?'var(--text)':'var(--err)'}">${fmtINR(balance)}</b> ${balance>=0?'Dr':'Cr'}</div>` : ""}
     </div>
     <div class="card">
       <div class="table-header">
@@ -1328,7 +1328,7 @@ function renderAdminPanel(content){
 
 function renderPermGrid(userId){
   return `
-    <div class="perm-grid" style="margin-top:12px;padding-top:12px;border-top:1px solid #1a1c22;">
+    <div class="perm-grid" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
       <span></span>
       ${MODULES.map(m=>`<span class="ph">${m.label}</span>`).join("")}
       <span style="font-size:11px;color:var(--muted);">View</span>
@@ -1676,7 +1676,7 @@ function renderImportMapping(content){
   area.innerHTML = `
     <div class="card">
       <div class="card-title">Map columns — ${escapeHtml(state.pendingImport.fileName)} (${state.pendingImport.rows.length} rows)</div>
-      ${state.pendingImport.isPdfGuess ? `<div style="font-size:11.5px;color:#fbbf24;background:#3a3214;border:1px solid #6b5a1e;border-radius:6px;padding:8px 10px;margin-bottom:10px;">PDF text extraction is best-effort — check the row count and a few amounts below before importing. If this looks wrong, export a CSV/Excel from your bank instead.</div>` : ""}
+      ${state.pendingImport.isPdfGuess ? `<div style="font-size:11.5px;color:#b45309;background:#fef3c7;border:1px solid #6b5a1e;border-radius:6px;padding:8px 10px;margin-bottom:10px;">PDF text extraction is best-effort — check the row count and a few amounts below before importing. If this looks wrong, export a CSV/Excel from your bank instead.</div>` : ""}
       <div class="row" style="gap:10px;flex-wrap:wrap;margin-bottom:10px;">
         <div class="field"><label>Date column</label><select class="form-input" id="map-date">${opt('date')}</select></div>
         <div class="field"><label>Description column</label><select class="form-input" id="map-description">${opt('description')}</select></div>
@@ -1755,7 +1755,7 @@ function renderQuickEntryForm(){
   const line = state.bankLines.find(l=>l.id===qe.bankLineId);
   const otherAccounts = state.coa.filter(a=>a.id !== state.bankAccountId);
   return `
-    <div class="card" style="margin:6px 0 12px;background:#0e1420;">
+    <div class="card" style="margin:6px 0 12px;background:#eef2f8;">
       <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">
         Posting: ${line.direction==="debit" ? "Bank account debited" : "Bank account credited"} ${fmtINR(line.amount)} on ${line.txn_date}
       </div>
@@ -2046,7 +2046,7 @@ function renderScanResult(content){
       <div class="field" style="margin-bottom:12px;"><label>Narration</label><input class="form-input" id="sb-narration" value="${escapeHtml(sb.narration||"")}" style="width:100%;" /></div>
       <details style="margin-bottom:12px;">
         <summary style="font-size:11.5px;color:var(--muted);cursor:pointer;">View raw extracted text</summary>
-        <pre style="font-size:11px;color:var(--muted2);white-space:pre-wrap;background:#0e1420;border-radius:6px;padding:10px;margin-top:6px;max-height:160px;overflow-y:auto;">${escapeHtml(sb.ocrText||"")}</pre>
+        <pre style="font-size:11px;color:var(--muted2);white-space:pre-wrap;background:#eef2f8;border-radius:6px;padding:10px;margin-top:6px;max-height:160px;overflow-y:auto;">${escapeHtml(sb.ocrText||"")}</pre>
       </details>
       <div class="row" style="gap:8px;">
         <button class="form-btn" id="sb-post-btn">Post entry</button>
@@ -2176,12 +2176,12 @@ function renderTrialBalance(area){
       ${rows.length===0 ? `<div style="padding:20px;color:var(--muted);font-size:13px;">No posted entries yet.</div>` : ""}
       ${rows.map(r=>`
         <div class="table-row">
-          <span style="flex:1;cursor:pointer;color:#9bc2ff;" data-drill="${r.account.id}">${escapeHtml(r.account.name)}</span>
+          <span style="flex:1;cursor:pointer;color:#1d4ed8;" data-drill="${r.account.id}">${escapeHtml(r.account.name)}</span>
           <span style="width:120px;text-align:right;">${r.bal>0?fmtINR(r.bal):""}</span>
           <span style="width:120px;text-align:right;">${r.bal<0?fmtINR(Math.abs(r.bal)):""}</span>
         </div>
       `).join("")}
-      <div class="totals-bar" style="border-top:2px solid #262932;">
+      <div class="totals-bar" style="border-top:2px solid var(--border2);">
         <div>Total Debit: <b>${fmtINR(totalDr)}</b></div>
         <div>Total Credit: <b>${fmtINR(totalCr)}</b></div>
         <div style="color:${diff===0?'var(--ok)':'var(--err)'}">${diff===0 ? "Tallied ✓" : `Mismatch: ${fmtINR(Math.abs(diff))}`}</div>
@@ -2201,7 +2201,7 @@ function renderPnL(area){
 
   const rowsHtml = (rows)=> rows.map(r=>`
     <div class="table-row">
-      <span style="flex:1;cursor:pointer;color:#9bc2ff;" data-drill="${r.account.id}">${escapeHtml(r.account.name)}</span>
+      <span style="flex:1;cursor:pointer;color:#1d4ed8;" data-drill="${r.account.id}">${escapeHtml(r.account.name)}</span>
       <span style="width:120px;text-align:right;">${fmtINR(r.amount)}</span>
     </div>
   `).join("");
@@ -2212,14 +2212,14 @@ function renderPnL(area){
       <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:10px 0 6px;">Income</div>
       <div class="table-header"><span style="flex:1;">Account</span><span style="width:120px;text-align:right;">Amount</span></div>
       ${incomeAccs.length===0 ? `<div style="padding:10px 4px;color:var(--muted);font-size:12.5px;">No income posted this period.</div>` : rowsHtml(incomeAccs)}
-      <div class="totals-bar" style="border-top:1px solid #262932;"><div>Total Income: <b>${fmtINR(totalIncome)}</b></div></div>
+      <div class="totals-bar" style="border-top:1px solid var(--border2);"><div>Total Income: <b>${fmtINR(totalIncome)}</b></div></div>
 
       <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:18px 0 6px;">Expenses</div>
       <div class="table-header"><span style="flex:1;">Account</span><span style="width:120px;text-align:right;">Amount</span></div>
       ${expenseAccs.length===0 ? `<div style="padding:10px 4px;color:var(--muted);font-size:12.5px;">No expenses posted this period.</div>` : rowsHtml(expenseAccs)}
-      <div class="totals-bar" style="border-top:1px solid #262932;"><div>Total Expenses: <b>${fmtINR(totalExpense)}</b></div></div>
+      <div class="totals-bar" style="border-top:1px solid var(--border2);"><div>Total Expenses: <b>${fmtINR(totalExpense)}</b></div></div>
 
-      <div class="totals-bar" style="border-top:2px solid #262932;margin-top:14px;">
+      <div class="totals-bar" style="border-top:2px solid var(--border2);margin-top:14px;">
         <div style="font-size:15px;">Net ${netProfit>=0?'Profit':'Loss'}: <b style="color:${netProfit>=0?'var(--ok)':'var(--err)'}">${fmtINR(Math.abs(netProfit))}</b></div>
       </div>
     </div>
@@ -2248,7 +2248,7 @@ function renderBalanceSheet(area){
 
   const rowsHtml = (rows)=> rows.map(r=>`
     <div class="table-row">
-      <span style="flex:1;cursor:pointer;color:#9bc2ff;" data-drill="${r.account.id}">${escapeHtml(r.account.name)}</span>
+      <span style="flex:1;cursor:pointer;color:#1d4ed8;" data-drill="${r.account.id}">${escapeHtml(r.account.name)}</span>
       <span style="width:120px;text-align:right;">${fmtINR(r.amount)}</span>
     </div>
   `).join("");
@@ -2261,22 +2261,22 @@ function renderBalanceSheet(area){
           <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Assets</div>
           <div class="table-header"><span style="flex:1;">Account</span><span style="width:110px;text-align:right;">Amount</span></div>
           ${assets.length===0 ? `<div style="padding:10px 4px;color:var(--muted);font-size:12.5px;">None</div>` : rowsHtml(assets)}
-          <div class="totals-bar" style="border-top:1px solid #262932;"><div>Total Assets: <b>${fmtINR(totalAssets)}</b></div></div>
+          <div class="totals-bar" style="border-top:1px solid var(--border2);"><div>Total Assets: <b>${fmtINR(totalAssets)}</b></div></div>
         </div>
         <div>
           <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Liabilities</div>
           <div class="table-header"><span style="flex:1;">Account</span><span style="width:110px;text-align:right;">Amount</span></div>
           ${liabilities.length===0 ? `<div style="padding:10px 4px;color:var(--muted);font-size:12.5px;">None</div>` : rowsHtml(liabilities)}
-          <div class="totals-bar" style="border-top:1px solid #262932;"><div>Total Liabilities: <b>${fmtINR(totalLiabilities)}</b></div></div>
+          <div class="totals-bar" style="border-top:1px solid var(--border2);"><div>Total Liabilities: <b>${fmtINR(totalLiabilities)}</b></div></div>
 
           <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px;">Equity</div>
           <div class="table-header"><span style="flex:1;">Account</span><span style="width:110px;text-align:right;">Amount</span></div>
           ${rowsHtml(equity)}
           <div class="table-row"><span style="flex:1;color:var(--muted);">Profit &amp; Loss A/c (retained)</span><span style="width:110px;text-align:right;">${fmtINR(retainedEarnings)}</span></div>
-          <div class="totals-bar" style="border-top:1px solid #262932;"><div>Total Equity: <b>${fmtINR(totalEquity)}</b></div></div>
+          <div class="totals-bar" style="border-top:1px solid var(--border2);"><div>Total Equity: <b>${fmtINR(totalEquity)}</b></div></div>
         </div>
       </div>
-      <div class="totals-bar" style="border-top:2px solid #262932;margin-top:16px;">
+      <div class="totals-bar" style="border-top:2px solid var(--border2);margin-top:16px;">
         <div>Total Assets: <b>${fmtINR(totalAssets)}</b></div>
         <div>Total Liabilities + Equity: <b>${fmtINR(totalLiabEquity)}</b></div>
         <div style="color:${diff===0?'var(--ok)':'var(--err)'}">${diff===0 ? "Balanced ✓" : `Out of balance: ${fmtINR(Math.abs(diff))}`}</div>
@@ -2943,7 +2943,7 @@ function renderStockSummaryTab(area){
           <span style="width:120px;text-align:right;">${fmtINR(r.value||0)}</span>
         </div>
       `).join("")}
-      <div class="totals-bar" style="border-top:2px solid #262932;"><div>Total stock value: <b>${fmtINR(totalValue)}</b></div></div>
+      <div class="totals-bar" style="border-top:2px solid var(--border2);"><div>Total stock value: <b>${fmtINR(totalValue)}</b></div></div>
     </div>
   `;
 }
@@ -3169,7 +3169,7 @@ function renderInvoiceForm(area, content){
 
       <div class="field" style="margin:14px 0;"><label>Terms / notes</label><input class="form-input" id="if-terms" value="${escapeHtml(d.terms)}" style="width:100%;" /></div>
 
-      <div class="totals-bar" style="border-top:2px solid #262932;flex-direction:column;align-items:flex-end;gap:4px;">
+      <div class="totals-bar" style="border-top:2px solid var(--border2);flex-direction:column;align-items:flex-end;gap:4px;">
         <div>Subtotal: <b>${fmtINR(subtotal)}</b></div>
         <div>GST: <b>${fmtINR(taxTotal)}</b></div>
         <div style="font-size:15px;">Grand Total: <b>${fmtINR(grandTotal)}</b></div>
@@ -3629,7 +3629,7 @@ function renderPayrollRunDraft(area, content){
           <span style="width:100px;text-align:right;font-weight:700;">${fmtINR(netPay(p))}</span>
         </div>
       `).join("")}
-      <div class="totals-bar" style="border-top:2px solid #262932;">
+      <div class="totals-bar" style="border-top:2px solid var(--border2);">
         <div>Total Gross: <b>${fmtINR(totalGross)}</b></div>
         <div>Total Net Pay: <b>${fmtINR(totalNet)}</b></div>
       </div>
@@ -3760,7 +3760,7 @@ function renderPayrollRunView(area, content){
           <span style="width:70px;text-align:right;"><button class="small-btn" data-view-slip="${p.id}">Slip</button></span>
         </div>
       `).join("")}
-      <div class="totals-bar" style="border-top:2px solid #262932;"><div>Total Net Pay: <b>${fmtINR(totalNet)}</b></div></div>
+      <div class="totals-bar" style="border-top:2px solid var(--border2);"><div>Total Net Pay: <b>${fmtINR(totalNet)}</b></div></div>
     </div>
   `;
   document.getElementById("run-back-btn").addEventListener("click", ()=>{ state.payrollRunViewing = null; renderPayrollBody(content); });
@@ -3804,7 +3804,7 @@ function renderPayslipPreview(area){
         <span>Gross Earnings: ${fmtINR(slip.gross_earnings)}</span>
         <span>Total Deductions: ${fmtINR(slip.total_deductions)}</span>
       </div>
-      <div style="text-align:center;margin-top:16px;padding:10px;background:#f3f3f3;border-radius:6px;font-size:16px;font-weight:800;">
+      <div style="text-align:center;margin-top:16px;padding:10px;background:#f0f2f5;border-radius:6px;font-size:16px;font-weight:800;">
         Net Pay: ${fmtINR(slip.net_pay)}
       </div>
       <div style="font-size:10.5px;color:#888;margin-top:14px;">Employer contributions (not deducted from employee): PF ${fmtINR(slip.pf_employer)}, ESI ${fmtINR(slip.esi_employer)}</div>
@@ -4013,7 +4013,7 @@ function renderGstFilingResult(content){
   const monthNames = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
   area.innerHTML = `
-    ${g.unresolvedPos ? `<div class="card" style="background:#3a1414;border-color:#6b1e1e;"><b style="color:#fca5a5;">⚠ Some parties are missing a state</b><div style="font-size:12px;color:#fca5a5;margin-top:4px;">Place of Supply couldn't be determined for one or more invoices — their "pos" field is blank in the export below. Add the party's state in the Parties tab and regenerate before filing.</div></div>` : ""}
+    ${g.unresolvedPos ? `<div class="card" style="background:#fee2e2;border-color:#b91c1c;"><b style="color:#b91c1c;">⚠ Some parties are missing a state</b><div style="font-size:12px;color:#b91c1c;margin-top:4px;">Place of Supply couldn't be determined for one or more invoices — their "pos" field is blank in the export below. Add the party's state in the Parties tab and regenerate before filing.</div></div>` : ""}
     <div class="card">
       <div class="card-title">GSTR-1 summary — ${monthNames[g.month]} ${g.year}</div>
       <div class="row" style="gap:20px;flex-wrap:wrap;font-size:12.5px;margin-bottom:14px;">
@@ -4031,7 +4031,7 @@ function renderGstFilingResult(content){
       <div class="table-header"><span style="flex:1;">Head</span><span style="width:110px;text-align:right;">Taxable Val</span><span style="width:90px;text-align:right;">IGST</span><span style="width:90px;text-align:right;">CGST</span><span style="width:90px;text-align:right;">SGST</span></div>
       <div class="table-row"><span style="flex:1;">3.1(a) Outward taxable supplies</span><span style="width:110px;text-align:right;">${fmtINR(g.outward.txval)}</span><span style="width:90px;text-align:right;">${fmtINR(g.outward.iamt)}</span><span style="width:90px;text-align:right;">${fmtINR(g.outward.camt)}</span><span style="width:90px;text-align:right;">${fmtINR(g.outward.samt)}</span></div>
       <div class="table-row"><span style="flex:1;">4. ITC available (purchase bills)</span><span style="width:110px;text-align:right;">${fmtINR(g.itc.txval)}</span><span style="width:90px;text-align:right;">${fmtINR(g.itc.iamt)}</span><span style="width:90px;text-align:right;">${fmtINR(g.itc.camt)}</span><span style="width:90px;text-align:right;">${fmtINR(g.itc.samt)}</span></div>
-      <div class="totals-bar" style="border-top:2px solid #262932;">
+      <div class="totals-bar" style="border-top:2px solid var(--border2);">
         <div>Net payable — IGST: <b>${fmtINR(g.netPayable.igst)}</b></div>
         <div>CGST: <b>${fmtINR(g.netPayable.cgst)}</b></div>
         <div>SGST: <b>${fmtINR(g.netPayable.sgst)}</b></div>
