@@ -145,6 +145,13 @@ window.__ensureLibs = async function(){
   .recon-tabs{display:flex;gap:6px;background:var(--panel2);border-radius:8px;padding:3px;margin-bottom:14px;width:fit-content;}
   .recon-tab{background:transparent;border:none;color:var(--muted);font-size:12px;font-weight:600;padding:7px 14px;border-radius:6px;cursor:pointer;}
   .recon-tab.active{background:#e4ecfa;color:#fff;}
+  .acc-dropdown{display:none;position:absolute;top:calc(100% + 2px);left:0;right:0;background:var(--panel);border:1px solid var(--border2);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:260px;overflow-y:auto;z-index:500;}
+  .acc-item{padding:7px 10px;font-size:12.5px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;}
+  .acc-item:hover,.acc-item.active{background:#e4ecfa;}
+  .acc-item .grp{font-size:10.5px;color:var(--muted2);white-space:nowrap;}
+  .acc-item.create-new{color:var(--accent);font-weight:600;border-top:1px solid var(--border);}
+  .acc-empty{padding:10px;font-size:12px;color:var(--muted);}
+  .line-row{overflow:visible;}
 </style>
 </head>
 <body>
@@ -974,6 +981,99 @@ function renderCOABody(content){
   });
 }
 
+// ---- Ledger type-ahead helpers ----
+
+function groupNameFor(acc){
+  const g = (state.accountGroups||[]).find(x=>x.id===acc.group_id);
+  return g ? g.name : "Ungrouped";
+}
+function ledgerLabel(accountId){
+  if(!accountId) return "";
+  const a = state.coa.find(x=>x.id===accountId);
+  return a ? a.name : "";
+}
+
+// Ranked ledger search: exact prefix first, then word-start, then substring.
+// Matches on ledger name AND alias, so "SD" can find "Sundry Debtors".
+function searchLedgers(query){
+  const q = (query||"").trim().toLowerCase();
+  if(!q) return state.coa.slice().sort((a,b)=>a.name.localeCompare(b.name)).slice(0, 50);
+  const scored = [];
+  state.coa.forEach(a=>{
+    const name = a.name.toLowerCase();
+    const alias = (a.alias||"").toLowerCase();
+    let score = null;
+    if(name.startsWith(q)) score = 0;
+    else if(alias && alias.startsWith(q)) score = 1;
+    else if(name.split(/[\s\-\/&]+/).some(w=>w.startsWith(q))) score = 2;
+    else if(name.includes(q)) score = 3;
+    else if(alias && alias.includes(q)) score = 4;
+    else {
+      // initials match: "sd" -> "Sundry Debtors"
+      const initials = a.name.split(/[\s\-\/&]+/).map(w=>w[0]||"").join("").toLowerCase();
+      if(initials.startsWith(q)) score = 5;
+    }
+    if(score !== null) scored.push({ a, score });
+  });
+  return scored
+    .sort((x,y)=> x.score - y.score || x.a.name.localeCompare(y.a.name))
+    .slice(0, 50)
+    .map(s=>s.a);
+}
+
+// Creates a ledger inline from the voucher screen. Asks only for the group,
+// since everything else can be filled in later from Chart of Accounts.
+async function quickCreateLedger(name){
+  if(!canEdit("coa")){ showToast("You don't have permission to create ledgers", "err"); return null; }
+  const groups = (state.accountGroups||[]).slice().sort((a,b)=>a.name.localeCompare(b.name));
+  if(!groups.length){ showToast("No account groups found — re-run schema.sql", "err"); return null; }
+
+  const picked = await promptForGroup(name, groups);
+  if(!picked) return null;
+
+  const acc = await createAccount(state.activeCompanyId, name, picked.nature, { group_id: picked.id });
+  if(acc){
+    state.coa.push(acc);
+    showToast(`Ledger "${name}" created under ${picked.name}`);
+    return acc;
+  }
+  return null;
+}
+
+// Small modal to pick a group when creating a ledger on the fly.
+function promptForGroup(ledgerName, groups){
+  return new Promise(resolve=>{
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:1000;";
+    overlay.innerHTML = `
+      <div class="card" style="width:380px;">
+        <div class="card-title">Create ledger "${escapeHtml(ledgerName)}"</div>
+        <div class="field" style="margin-bottom:12px;">
+          <label>Which group does it belong to?</label>
+          <select class="form-input" id="qcl-group" style="width:100%;">
+            ${groups.map(g=>`<option value="${g.id}">${escapeHtml(g.name)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="row" style="gap:8px;">
+          <button class="form-btn" id="qcl-ok">Create</button>
+          <button class="form-btn secondary" id="qcl-cancel">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const sel = overlay.querySelector("#qcl-group");
+    sel.focus();
+    const done = (val)=>{ document.body.removeChild(overlay); resolve(val); };
+    overlay.querySelector("#qcl-ok").addEventListener("click", ()=>{
+      done(groups.find(g=>g.id===sel.value) || null);
+    });
+    overlay.querySelector("#qcl-cancel").addEventListener("click", ()=> done(null));
+    overlay.addEventListener("keydown", e=>{
+      if(e.key === "Enter"){ e.preventDefault(); done(groups.find(g=>g.id===sel.value) || null); }
+      if(e.key === "Escape"){ e.preventDefault(); done(null); }
+    });
+  });
+}
+
 function renderEntry(content){
   if(state.voucherLines.length === 0){
     state.voucherLines = [
@@ -1022,7 +1122,7 @@ function renderEntry(content){
       <div id="shortcuts-panel" style="display:${state.showShortcuts?'flex':'none'};flex-wrap:wrap;gap:14px;background:#eef2f8;border:1px solid #c7d7ee;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:11.5px;color:#475569;">
         <span><b>F4</b> Contra</span><span><b>F5</b> Payment</span><span><b>F6</b> Receipt</span>
         <span><b>F7</b> Journal</span><span><b>F8</b> Sales</span><span><b>F9</b> Purchase</span>
-        <span><b>Enter</b> next field / new line</span><span><b>Alt+C</b> save entry</span><span><b>Esc</b> clear form</span>
+        <span><b>Type</b> to search ledgers</span><span><b>↑↓</b> pick</span><span><b>Enter</b> select / next field</span><span><b>Alt+C</b> save entry</span><span><b>Esc</b> close list</span>
       </div>
 
       <div class="line-header">
@@ -1031,7 +1131,11 @@ function renderEntry(content){
       <div id="lines-wrap">
         ${state.voucherLines.map((l,idx)=>`
           <div class="line-row" data-line="${l.id}" data-index="${idx}">
-            <select class="form-input line-acc" style="flex:1;">${accOptions(l.accountId)}</select>
+            <div class="acc-wrap" style="position:relative;flex:1;">
+              <input class="form-input line-acc-input" placeholder="Type ledger name…" autocomplete="off"
+                     value="${escapeHtml(ledgerLabel(l.accountId))}" style="width:100%;" />
+              <div class="acc-dropdown"></div>
+            </div>
             <select class="form-input line-type" style="width:90px;">
               <option value="debit" ${l.type==='debit'?'selected':''}>Debit</option>
               <option value="credit" ${l.type==='credit'?'selected':''}>Credit</option>
@@ -1145,11 +1249,11 @@ function renderEntry(content){
   content.querySelectorAll(".line-row").forEach(row=>{
     const id = row.dataset.line;
     const idx = parseInt(row.dataset.index, 10);
-    const accSel = row.querySelector(".line-acc");
+    const accInput = row.querySelector(".line-acc-input");
+    const dropdown = row.querySelector(".acc-dropdown");
     const typeSel = row.querySelector(".line-type");
     const amtInput = row.querySelector(".line-amount");
 
-    accSel.addEventListener("change", e=>updateDraftLine(id,{accountId:e.target.value}));
     typeSel.addEventListener("change", e=>updateDraftLine(id,{type:e.target.value}));
     amtInput.addEventListener("input", e=>updateDraftLine(id,{amount:e.target.value}));
     row.querySelector(".line-remove").addEventListener("click", ()=>{
@@ -1157,12 +1261,104 @@ function renderEntry(content){
       renderEntry(content);
     });
 
-    // Enter on account select -> jump to amount field
-    accSel.addEventListener("keydown", e=>{
-      if(e.key === "Enter"){ e.preventDefault(); amtInput.focus(); }
+    // ---- Type-ahead ledger picker (Tally-style) ----
+    let matches = [];
+    let highlighted = 0;
+
+    const closeDropdown = ()=>{ dropdown.style.display = "none"; };
+
+    const openDropdown = (query)=>{
+      matches = searchLedgers(query);
+      highlighted = 0;
+      if(!matches.length && !query.trim()){ closeDropdown(); return; }
+      dropdown.innerHTML =
+        matches.map((a,i)=>`
+          <div class="acc-item ${i===0?'active':''}" data-pick="${a.id}">
+            <span>${escapeHtml(a.name)}${a.alias?` <span class="grp">(${escapeHtml(a.alias)})</span>`:''}</span>
+            <span class="grp">${escapeHtml(groupNameFor(a))}</span>
+          </div>`).join("")
+        + (query.trim()
+            ? `<div class="acc-item create-new" data-create="${escapeHtml(query.trim())}">+ Create ledger "${escapeHtml(query.trim())}"</div>`
+            : "")
+        + (!matches.length && !query.trim() ? `<div class="acc-empty">Start typing a ledger name…</div>` : "");
+      dropdown.style.display = "block";
+      wirePicks();
+    };
+
+    const applyHighlight = ()=>{
+      dropdown.querySelectorAll(".acc-item").forEach((el,i)=>
+        el.classList.toggle("active", i===highlighted));
+      const el = dropdown.querySelectorAll(".acc-item")[highlighted];
+      if(el) el.scrollIntoView({ block:"nearest" });
+    };
+
+    const selectLedger = (acc)=>{
+      updateDraftLine(id, { accountId: acc.id });
+      accInput.value = acc.name;
+      closeDropdown();
+      amtInput.focus();
+    };
+
+    const wirePicks = ()=>{
+      dropdown.querySelectorAll("[data-pick]").forEach(el=>{
+        el.addEventListener("mousedown", ev=>{
+          ev.preventDefault();
+          const acc = state.coa.find(a=>a.id===el.dataset.pick);
+          if(acc) selectLedger(acc);
+        });
+      });
+      const createEl = dropdown.querySelector("[data-create]");
+      if(createEl){
+        createEl.addEventListener("mousedown", async ev=>{
+          ev.preventDefault();
+          const acc = await quickCreateLedger(createEl.dataset.create);
+          if(acc) selectLedger(acc);
+        });
+      }
+    };
+
+    accInput.addEventListener("focus", ()=>{ accInput.select(); openDropdown(accInput.value); });
+    accInput.addEventListener("input", ()=>{
+      updateDraftLine(id, { accountId: "" });   // typing invalidates any prior pick
+      openDropdown(accInput.value);
     });
-    // Enter on amount -> go to next line's account select, or create a new opposite-type line if this is the last one
-    // Select existing content on focus so typing overwrites instead of appending
+    accInput.addEventListener("blur", ()=>{
+      setTimeout(()=>{
+        closeDropdown();
+        // If the text doesn't resolve to a ledger, clear it so nothing silently posts wrong
+        const line = state.voucherLines.find(l=>l.id===id);
+        if(line && !line.accountId) accInput.value = "";
+      }, 150);
+    });
+
+    accInput.addEventListener("keydown", e=>{
+      const items = dropdown.querySelectorAll(".acc-item");
+      if(e.key === "ArrowDown"){
+        e.preventDefault();
+        if(dropdown.style.display !== "block") openDropdown(accInput.value);
+        else { highlighted = Math.min(highlighted+1, items.length-1); applyHighlight(); }
+      } else if(e.key === "ArrowUp"){
+        e.preventDefault();
+        highlighted = Math.max(highlighted-1, 0); applyHighlight();
+      } else if(e.key === "Enter" || e.key === "Tab"){
+        const el = items[highlighted];
+        if(dropdown.style.display === "block" && el){
+          e.preventDefault();
+          if(el.dataset.create){
+            quickCreateLedger(el.dataset.create).then(acc=>{ if(acc) selectLedger(acc); });
+          } else {
+            const acc = state.coa.find(a=>a.id===el.dataset.pick);
+            if(acc) selectLedger(acc);
+          }
+        } else if(e.key === "Enter"){
+          e.preventDefault(); amtInput.focus();
+        }
+      } else if(e.key === "Escape"){
+        closeDropdown();
+      }
+    });
+
+    // Enter on amount -> next line's ledger field, or auto-add an opposite line
     amtInput.addEventListener("focus", e=> e.target.select());
     amtInput.addEventListener("keydown", e=>{
       if(e.key !== "Enter") return;
@@ -1175,17 +1371,17 @@ function renderEntry(content){
         renderEntry(content);
       } else {
         const nextRow = content.querySelector(`.line-row[data-index="${idx+1}"]`);
-        if(nextRow) nextRow.querySelector(".line-acc").focus();
+        if(nextRow) nextRow.querySelector(".line-acc-input").focus();
       }
     });
   });
 
-  // after re-render, if we just auto-added a line, focus its account dropdown
+  // after re-render, if we just auto-added a line, focus its ledger field
   if(state.focusLastLine){
     state.focusLastLine = false;
     const rows = content.querySelectorAll(".line-row");
     const last = rows[rows.length-1];
-    if(last) last.querySelector(".line-acc").focus();
+    if(last) last.querySelector(".line-acc-input").focus();
   }
 
   document.getElementById("add-debit").addEventListener("click", ()=>{ addDraftLine("debit"); renderEntry(content); });
