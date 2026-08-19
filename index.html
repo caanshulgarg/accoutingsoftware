@@ -423,6 +423,8 @@ let state = {
   _groupsLoadedFor: null,
   coaTab: 'tree',
   coaExpanded: {},
+  periodFrom: null,
+  periodTo: null,
 };
 
 const MODULES = [
@@ -708,7 +710,8 @@ function renderMain(){
   const company = state.companies.find(c=>c.id===state.activeCompanyId);
   const titles = { entry: "Voucher Entry", ledger: "Ledger", coa: "Chart of Accounts", admin: "Admin Panel", bank_recon: "Bank Reconciliation", scan_bill: "Scan Bill/Receipt", reports: "Reports", bulk_import: "Bulk Import", inventory: "Inventory", invoicing: "Invoices", payroll: "Payroll", gst_filing: "GST Filing" };
   document.getElementById("topbar-title").textContent = titles[state.tab];
-  document.getElementById("topbar-sub").textContent = state.tab==="admin" ? "Manage team roles & permissions" : (company ? company.name : "No company selected");
+  const periodTxt = (state.periodFrom && state.periodTo) ? `  ·  Period: ${state.periodFrom} to ${state.periodTo}` : "";
+  document.getElementById("topbar-sub").textContent = state.tab==="admin" ? "Manage team roles & permissions" : ((company ? company.name : "No company selected") + periodTxt);
 
   const content = document.getElementById("content");
 
@@ -1302,6 +1305,17 @@ function ledgerCreateModal(ledgerName, groups){
   });
 }
 
+// Default date for a new voucher: today if it falls inside the selected period,
+// otherwise the period's end date — so back-dated periods don't need F2 every time.
+function defaultVoucherDate(){
+  const today = todayISO();
+  if(state.periodFrom && state.periodTo){
+    if(today >= state.periodFrom && today <= state.periodTo) return today;
+    return state.periodTo;
+  }
+  return today;
+}
+
 function renderEntry(content){
   if(state.voucherLines.length === 0){
     state.voucherLines = [
@@ -1335,14 +1349,11 @@ function renderEntry(content){
     <div class="card">
       <div class="row" style="gap:12px;flex-wrap:wrap;margin-bottom:14px;justify-content:space-between;">
         <div class="row" style="gap:12px;flex-wrap:wrap;">
-          <div class="field"><label>Date</label><input class="form-input" type="date" id="v-date" value="${state.draftDate || todayISO()}" /></div>
+          <div class="field"><label>Date</label><input class="form-input" type="date" id="v-date" value="${state.draftDate || defaultVoucherDate()}" /></div>
           <div class="field"><label>Voucher type <span style="color:var(--muted2);font-weight:400;">(F4–F9)</span></label>
             <select class="form-input" id="v-type">
               ${["Contra","Payment","Receipt","Journal","Sales","Purchase"].map(t=>`<option ${ (state.draftType||"Journal")===t?'selected':''}>${t}</option>`).join("")}
             </select>
-          </div>
-          <div class="field" style="flex:1;min-width:220px;"><label>Narration</label>
-            <input class="form-input" id="v-narration" placeholder="e.g. Being rent paid for August 2026" value="${escapeHtml(state.draftNarration||"")}" />
           </div>
         </div>
         <button class="small-btn" id="shortcuts-toggle" style="align-self:flex-end;">⌨ Shortcuts</button>
@@ -1350,9 +1361,11 @@ function renderEntry(content){
       <div id="shortcuts-panel" style="display:${state.showShortcuts?'flex':'none'};flex-wrap:wrap;gap:14px;background:#eef2f8;border:1px solid #c7d7ee;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:11.5px;color:#475569;">
         <span><b>F4</b> Contra</span><span><b>F5</b> Payment</span><span><b>F6</b> Receipt</span>
         <span><b>F7</b> Journal</span><span><b>F8</b> Sales</span><span><b>F9</b> Purchase</span>
-        <span><b>Type</b> to search ledgers</span><span><b>↑↓</b> pick</span><span><b>Enter</b> select / next field</span>
-        <span><b>Alt+G</b> GST</span><span><b>Alt+T</b> TDS</span><span><b>Alt+I</b> Stock item</span>
-        <span><b>Alt+C</b> save entry</span><span><b>Esc</b> close panel / clear</span>
+        <span><b>F4-F9</b> voucher type</span><span><b>F2</b> date</span><span><b>F3</b> company</span><span><b>Alt+F2</b> period</span>
+        <span><b>Type</b> to search ledgers</span><span><b>↑↓</b> pick</span><span><b>Enter</b> select / next / balance line</span>
+        <span><b>Alt+G</b> GST</span><span><b>Alt+T</b> TDS</span><span><b>Alt+I</b> Stock</span>
+        <span><b>Ctrl+R</b> repeat narration</span><span><b>Alt+D</b> delete line</span>
+        <span><b>Ctrl+A</b> / <b>Alt+C</b> save</span><span><b>Esc</b> close panel / clear</span>
       </div>
 
       <div class="line-header">
@@ -1466,6 +1479,10 @@ function renderEntry(content){
           </div>
         ` : ""}
       </div>
+      <div class="field" style="margin-top:14px;"><label>Narration <span style="color:var(--muted2);font-weight:400;">(Ctrl+R repeats last)</span></label>
+        <input class="form-input" id="v-narration" placeholder="Being…" value="${escapeHtml(state.draftNarration||"")}" style="width:100%;" />
+      </div>
+
       <div class="totals-bar">
         <div>Debit: <b id="totals-debit">${fmtINR(totalDebit)}</b></div>
         <div>Credit: <b id="totals-credit">${fmtINR(totalCredit)}</b></div>
@@ -1800,6 +1817,144 @@ function resetEntryDraft(content){
   showToast("Form cleared");
 }
 
+/* ---- Keyboard-driven modals for F2 (date), F3 (company), Alt+F2 (period) ---- */
+
+function dateModal(title, currentValue, onSave){
+  const overlay = document.createElement("div");
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:flex-start;justify-content:center;padding-top:14vh;z-index:1000;";
+  overlay.innerHTML = `
+    <div class="card" style="width:320px;">
+      <div class="card-title">${title}</div>
+      <input class="form-input" id="dm-date" type="date" value="${currentValue}" style="width:100%;" />
+      <div style="font-size:11px;color:var(--muted2);margin-top:8px;">Enter to accept · Esc to cancel</div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const inp = overlay.querySelector("#dm-date");
+  setTimeout(()=> inp.focus(), 20);
+  const close = ()=> document.body.removeChild(overlay);
+  overlay.addEventListener("keydown", e=>{
+    e.stopPropagation();
+    if(e.key === "Enter"){ e.preventDefault(); const v = inp.value; close(); if(v) onSave(v); }
+    if(e.key === "Escape"){ e.preventDefault(); close(); }
+  });
+  overlay.addEventListener("mousedown", e=>{ if(e.target === overlay) close(); });
+}
+
+function periodModal(){
+  const from = state.periodFrom || (todayISO().slice(0,4) + "-04-01");
+  const to = state.periodTo || todayISO();
+  const overlay = document.createElement("div");
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:flex-start;justify-content:center;padding-top:14vh;z-index:1000;";
+  overlay.innerHTML = `
+    <div class="card" style="width:400px;">
+      <div class="card-title">Change period</div>
+      <div class="row" style="gap:10px;">
+        <div class="field" style="flex:1;"><label>From</label><input class="form-input" id="pm-from" type="date" value="${from}" style="width:100%;" /></div>
+        <div class="field" style="flex:1;"><label>To</label><input class="form-input" id="pm-to" type="date" value="${to}" style="width:100%;" /></div>
+      </div>
+      <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap;">
+        <button class="small-btn" data-preset="fy">This FY</button>
+        <button class="small-btn" data-preset="q">This quarter</button>
+        <button class="small-btn" data-preset="m">This month</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted2);margin-top:10px;">Sets the default voucher date range and the period used by Reports. Enter to accept · Esc to cancel</div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const fromEl = overlay.querySelector("#pm-from");
+  const toEl = overlay.querySelector("#pm-to");
+  setTimeout(()=> fromEl.focus(), 20);
+  const close = ()=> document.body.removeChild(overlay);
+
+  overlay.querySelectorAll("[data-preset]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const now = new Date();
+      const y = now.getFullYear(), m = now.getMonth();
+      if(btn.dataset.preset === "fy"){
+        // Indian FY runs April–March
+        const fyStart = m >= 3 ? y : y-1;
+        fromEl.value = `${fyStart}-04-01`;
+        toEl.value = `${fyStart+1}-03-31`;
+      } else if(btn.dataset.preset === "q"){
+        const qStart = Math.floor(m/3)*3;
+        fromEl.value = `${y}-${String(qStart+1).padStart(2,'0')}-01`;
+        toEl.value = new Date(y, qStart+3, 0).toISOString().slice(0,10);
+      } else {
+        fromEl.value = `${y}-${String(m+1).padStart(2,'0')}-01`;
+        toEl.value = new Date(y, m+1, 0).toISOString().slice(0,10);
+      }
+    });
+  });
+
+  const save = ()=>{
+    state.periodFrom = fromEl.value;
+    state.periodTo = toEl.value;
+    state.reportFrom = fromEl.value;
+    state.reportTo = toEl.value;
+    close();
+    showToast(`Period set: ${state.periodFrom} to ${state.periodTo}`);
+  };
+  overlay.addEventListener("keydown", e=>{
+    e.stopPropagation();
+    if(e.key === "Enter"){ e.preventDefault(); save(); }
+    if(e.key === "Escape"){ e.preventDefault(); close(); }
+  });
+  overlay.addEventListener("mousedown", e=>{ if(e.target === overlay) close(); });
+}
+
+// F3 — company switcher with type-ahead, arrows and Enter.
+function companyModal(){
+  let filtered = state.companies.slice();
+  let hi = 0;
+  const overlay = document.createElement("div");
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:flex-start;justify-content:center;padding-top:10vh;z-index:1000;";
+  overlay.innerHTML = `
+    <div class="card" style="width:460px;max-height:70vh;display:flex;flex-direction:column;">
+      <div class="card-title">Select company</div>
+      <input class="form-input" id="cm-search" placeholder="Type to filter…" autocomplete="off" style="width:100%;margin-bottom:8px;" />
+      <div id="cm-list" style="overflow-y:auto;max-height:46vh;"></div>
+      <div style="font-size:11px;color:var(--muted2);margin-top:8px;">↑↓ to move · Enter to open · Esc to cancel</div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const searchEl = overlay.querySelector("#cm-search");
+  const listEl = overlay.querySelector("#cm-list");
+  const close = ()=> document.body.removeChild(overlay);
+
+  const draw = ()=>{
+    listEl.innerHTML = filtered.length
+      ? filtered.map((co,i)=>`
+          <div class="acc-item ${i===hi?'active':''}" data-cid="${co.id}">
+            <span>${escapeHtml(co.name)}${co.id===state.activeCompanyId?' <span class="grp">(current)</span>':''}</span>
+            <span class="grp">${escapeHtml(co.type||'')}</span>
+          </div>`).join("")
+      : `<div class="acc-empty">No matching company</div>`;
+    listEl.querySelectorAll("[data-cid]").forEach(el=>{
+      el.addEventListener("mousedown", ev=>{ ev.preventDefault(); pick(el.dataset.cid); });
+    });
+  };
+  const pick = async (id)=>{ close(); await selectCompany(id); };
+  const applyHi = ()=>{
+    listEl.querySelectorAll(".acc-item").forEach((el,i)=> el.classList.toggle("active", i===hi));
+    const el = listEl.querySelectorAll(".acc-item")[hi];
+    if(el) el.scrollIntoView({ block:"nearest" });
+  };
+
+  searchEl.addEventListener("input", ()=>{
+    const q = searchEl.value.trim().toLowerCase();
+    filtered = state.companies.filter(co=> co.name.toLowerCase().includes(q));
+    hi = 0; draw();
+  });
+  overlay.addEventListener("keydown", e=>{
+    e.stopPropagation();
+    if(e.key === "ArrowDown"){ e.preventDefault(); hi = Math.min(hi+1, filtered.length-1); applyHi(); }
+    else if(e.key === "ArrowUp"){ e.preventDefault(); hi = Math.max(hi-1, 0); applyHi(); }
+    else if(e.key === "Enter"){ e.preventDefault(); if(filtered[hi]) pick(filtered[hi].id); }
+    else if(e.key === "Escape"){ e.preventDefault(); close(); }
+  });
+  overlay.addEventListener("mousedown", e=>{ if(e.target === overlay) close(); });
+  draw();
+  setTimeout(()=> searchEl.focus(), 20);
+}
+
 // Global keyboard shortcuts for voucher entry — Tally-style function keys.
 // Registered once; only acts when the Voucher Entry tab is active.
 let shortcutsBound = false;
@@ -1807,8 +1962,69 @@ function bindGlobalShortcuts(){
   if(shortcutsBound) return;
   shortcutsBound = true;
   document.addEventListener("keydown", (e)=>{
+    // F3 (company) and Alt+F2 (period) work from any screen, like Tally
+    if(e.key === "F3"){
+      e.preventDefault();
+      companyModal();
+      return;
+    }
+    if(e.altKey && e.key === "F2"){
+      e.preventDefault();
+      periodModal();
+      return;
+    }
+
     if(state.tab !== "entry" || !state.activeCompanyId) return;
     const content = document.getElementById("content");
+
+    // F2 — change the voucher date
+    if(e.key === "F2"){
+      e.preventDefault();
+      const cur = document.getElementById("v-date");
+      dateModal("Change voucher date", (cur && cur.value) || todayISO(), (val)=>{
+        state.draftDate = val;
+        if(cur) cur.value = val;
+        showToast("Date set to " + val);
+      });
+      return;
+    }
+    // Ctrl+A — accept/save, Tally's classic save key (Alt+C also works)
+    if(e.ctrlKey && (e.key === "a" || e.key === "A")){
+      e.preventDefault();
+      submitVoucher(content);
+      return;
+    }
+    // Ctrl+R — repeat the narration from the last posted voucher
+    if(e.ctrlKey && (e.key === "r" || e.key === "R")){
+      e.preventDefault();
+      const last = (state.vouchers || [])[0];
+      if(last && last.narration){
+        state.draftNarration = last.narration;
+        const narr = document.getElementById("v-narration");
+        if(narr){ narr.value = last.narration; narr.focus(); narr.select(); }
+        showToast("Narration repeated");
+      } else {
+        showToast("No previous narration to repeat", "err");
+      }
+      return;
+    }
+    // Alt+D — remove the line the cursor is currently in
+    if(e.altKey && (e.key === "d" || e.key === "D")){
+      const row = document.activeElement && document.activeElement.closest(".line-row");
+      if(row){
+        e.preventDefault();
+        const id = row.dataset.line;
+        if(state.voucherLines.length > 1){
+          state.voucherLines = state.voucherLines.filter(l=>l.id!==id);
+          renderEntry(content);
+          showToast("Line removed");
+        } else {
+          showToast("A voucher needs at least one line", "err");
+        }
+      }
+      return;
+    }
+
     const typeMap = { F4:"Contra", F5:"Payment", F6:"Receipt", F7:"Journal", F8:"Sales", F9:"Purchase" };
     if(typeMap[e.key]){
       e.preventDefault();
