@@ -109,6 +109,10 @@
 </head>
 <body>
 
+<div id="boot-screen" style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0c0f;color:#8a8f98;font-family:ui-sans-serif,system-ui;font-size:14px;">
+  Loading Practice Suite…
+</div>
+
 <div id="config-banner">⚠ Supabase not configured. Edit <code>SUPABASE_URL</code> and <code>SUPABASE_ANON_KEY</code> at the top of the script below.</div>
 
 <div id="auth-screen" style="display:none;">
@@ -220,14 +224,47 @@
 /* ============================================================
    CONFIG — put your Supabase project details here
    ============================================================ */
+
+// Global safety net: surfaces any uncaught error visibly instead of leaving a blank page.
+window.addEventListener("error", function(ev){
+  if(document.getElementById("boot-screen") && document.getElementById("boot-screen").style.display !== "none"){
+    showFatalError("Startup error", (ev.message || "Unknown error") + "<br/><br/>Line: " + (ev.lineno || "?"));
+  }
+});
+window.addEventListener("unhandledrejection", function(ev){
+  if(document.getElementById("boot-screen") && document.getElementById("boot-screen").style.display !== "none"){
+    showFatalError("Startup error", (ev.reason && ev.reason.message) || String(ev.reason));
+  }
+});
+
 const SUPABASE_URL = "https://sgbkurfhcctnjbtkpwxl.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNnYmt1cmZoY2N0bmpidGtwd3hsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxNDk0NjksImV4cCI6MjEwMjcyNTQ2OX0.LzBq9ow-p0QbjG2XgtjyRqzz3F9AjkJg1sEXxfGCPoo";
 
 let supa = null;
-if (SUPABASE_URL !== "YOUR_SUPABASE_URL" && SUPABASE_ANON_KEY !== "YOUR_SUPABASE_ANON_KEY") {
-  supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-} else {
-  document.getElementById("config-banner").style.display = "block";
+try {
+  if (SUPABASE_URL !== "YOUR_SUPABASE_URL" && SUPABASE_ANON_KEY !== "YOUR_SUPABASE_ANON_KEY") {
+    if (typeof window.supabase === "undefined") {
+      throw new Error("Supabase library failed to load from the CDN. Check your internet connection and refresh — if this keeps happening, an ad-blocker or network filter may be blocking cdnjs.cloudflare.com.");
+    }
+    supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  } else {
+    document.getElementById("config-banner").style.display = "block";
+  }
+} catch (e) {
+  showFatalError("Could not connect to Supabase", e.message);
+}
+
+// Shows a visible, readable error instead of leaving the page blank when
+// something fails before the normal screens can render.
+function showFatalError(title, detail){
+  document.body.innerHTML = `
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0c0f;color:#e5e7eb;font-family:ui-sans-serif,system-ui;padding:20px;">
+      <div style="max-width:480px;background:#111318;border:1px solid #6b1e1e;border-radius:12px;padding:24px;">
+        <div style="font-size:16px;font-weight:700;color:#fca5a5;margin-bottom:8px;">⚠ ${title}</div>
+        <div style="font-size:13px;color:#c3c6cc;line-height:1.6;">${detail}</div>
+        <button onclick="location.reload()" style="margin-top:16px;background:#3d8bfd;border:none;color:#fff;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;">Reload page</button>
+      </div>
+    </div>`;
 }
 
 /* ============================================================
@@ -1796,6 +1833,8 @@ document.getElementById("pending-logout").addEventListener("click", async ()=>{ 
 document.getElementById("logout-btn").addEventListener("click", async ()=>{ await supa.auth.signOut(); location.reload(); });
 
 function showScreen(name){
+  const boot = document.getElementById("boot-screen");
+  if(boot) boot.style.display = "none";
   document.getElementById("auth-screen").style.display = name==="auth" ? "flex" : "none";
   document.getElementById("pending-screen").style.display = name==="pending" ? "flex" : "none";
   document.getElementById("app").style.display = name==="app" ? "flex" : "none";
@@ -4035,10 +4074,18 @@ function exportGstr3bJson(g){
 async function init(){
   bindGlobalShortcuts();
   if(!supa){ showScreen("app"); renderCompanyList(); renderMain(); return; }
-  const { data: { session } } = await supa.auth.getSession();
-  if(session){ await bootAfterAuth(); } else { showScreen("auth"); }
+  try {
+    const { data: { session }, error } = await supa.auth.getSession();
+    if(error) throw error;
+    if(session){ await bootAfterAuth(); } else { showScreen("auth"); }
+  } catch(e) {
+    showFatalError(
+      "Could not reach Supabase",
+      `${e.message || e}<br/><br/>Double-check the Supabase URL and anon key near the top of this file, and confirm the Supabase project is active (not paused).`
+    );
+  }
 }
-init();
+init().catch(e => showFatalError("Something went wrong on startup", e.message || String(e)));
 </script>
 </body>
 </html>
