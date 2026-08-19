@@ -287,6 +287,11 @@ window.addEventListener("unhandledrejection", function(ev){
 const SUPABASE_URL = "https://sgbkurfhcctnjbtkpwxl.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNnYmt1cmZoY2N0bmpidGtwd3hsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxNDk0NjksImV4cCI6MjEwMjcyNTQ2OX0.LzBq9ow-p0QbjG2XgtjyRqzz3F9AjkJg1sEXxfGCPoo";
 
+// macOS reports the Option key as Alt, but labels it differently — and its
+// F-keys need Fn by default, so we surface Ctrl+digit alternatives there.
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+const ALT = IS_MAC ? "⌥" : "Alt";
+
 let supa = null;
 
 // Creates the Supabase client. Called from init() AFTER the library fallback
@@ -1350,7 +1355,7 @@ function renderEntry(content){
       <div class="row" style="gap:12px;flex-wrap:wrap;margin-bottom:14px;justify-content:space-between;">
         <div class="row" style="gap:12px;flex-wrap:wrap;">
           <div class="field"><label>Date</label><input class="form-input" type="date" id="v-date" value="${state.draftDate || defaultVoucherDate()}" /></div>
-          <div class="field"><label>Voucher type <span style="color:var(--muted2);font-weight:400;">(F4–F9)</span></label>
+          <div class="field"><label>Voucher type <span style="color:var(--muted2);font-weight:400;">(${IS_MAC?"Ctrl+4…9":"F4–F9"})</span></label>
             <select class="form-input" id="v-type">
               ${["Contra","Payment","Receipt","Journal","Sales","Purchase"].map(t=>`<option ${ (state.draftType||"Journal")===t?'selected':''}>${t}</option>`).join("")}
             </select>
@@ -1361,11 +1366,14 @@ function renderEntry(content){
       <div id="shortcuts-panel" style="display:${state.showShortcuts?'flex':'none'};flex-wrap:wrap;gap:14px;background:#eef2f8;border:1px solid #c7d7ee;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:11.5px;color:#475569;">
         <span><b>F4</b> Contra</span><span><b>F5</b> Payment</span><span><b>F6</b> Receipt</span>
         <span><b>F7</b> Journal</span><span><b>F8</b> Sales</span><span><b>F9</b> Purchase</span>
-        <span><b>F4-F9</b> voucher type</span><span><b>F2</b> date</span><span><b>F3</b> company</span><span><b>Alt+F2</b> period</span>
+        <span><b>${IS_MAC?'Ctrl+4…9':'F4–F9'}</b> voucher type</span>
+        <span><b>${IS_MAC?'Ctrl+2':'F2'}</b> date</span>
+        <span><b>${IS_MAC?'Ctrl+3':'F3'}</b> company</span>
+        <span><b>${IS_MAC?'Ctrl+Shift+2':'Alt+F2'}</b> period</span>
         <span><b>Type</b> to search ledgers</span><span><b>↑↓</b> pick</span><span><b>Enter</b> select / next / balance line</span>
-        <span><b>Alt+G</b> GST</span><span><b>Alt+T</b> TDS</span><span><b>Alt+I</b> Stock</span>
-        <span><b>Ctrl+R</b> repeat narration</span><span><b>Alt+D</b> delete line</span>
-        <span><b>Ctrl+A</b> / <b>Alt+C</b> save</span><span><b>Esc</b> close panel / clear</span>
+        <span><b>${ALT}+G</b> GST</span><span><b>${ALT}+T</b> TDS</span><span><b>${ALT}+I</b> Stock</span>
+        <span><b>Ctrl+R</b> repeat narration</span><span><b>${ALT}+D</b> delete line</span>
+        <span><b>Ctrl+A</b> save</span><span><b>Esc</b> close panel / clear</span>
       </div>
 
       <div class="line-header">
@@ -1391,9 +1399,9 @@ function renderEntry(content){
       <div class="row" style="margin-top:8px;gap:8px;">
         <button class="small-btn" id="add-debit">+ Debit line</button>
         <button class="small-btn" id="add-credit">+ Credit line</button>
-        <button class="small-btn" id="gst-toggle" style="margin-left:auto;">+ GST <span style="opacity:.6;">Alt+G</span></button>
-        <button class="small-btn" id="tds-toggle">+ TDS <span style="opacity:.6;">Alt+T</span></button>
-        <button class="small-btn" id="stock-toggle">+ Stock <span style="opacity:.6;">Alt+I</span></button>
+        <button class="small-btn" id="gst-toggle" style="margin-left:auto;">+ GST <span style="opacity:.6;">${ALT}+G</span></button>
+        <button class="small-btn" id="tds-toggle">+ TDS <span style="opacity:.6;">${ALT}+T</span></button>
+        <button class="small-btn" id="stock-toggle">+ Stock <span style="opacity:.6;">${ALT}+I</span></button>
       </div>
 
       <div id="gst-panel" style="display:${state.showGstPanel?'flex':'none'};flex-wrap:wrap;gap:10px;align-items:flex-end;background:#eef2f8;border:1px solid #c7d7ee;border-radius:8px;padding:12px 14px;margin-top:10px;">
@@ -1963,12 +1971,14 @@ function bindGlobalShortcuts(){
   shortcutsBound = true;
   document.addEventListener("keydown", (e)=>{
     // F3 (company) and Alt+F2 (period) work from any screen, like Tally
-    if(e.key === "F3"){
+    // Mac keyboards need Fn for F-keys by default, so every F-key shortcut also
+    // has a Ctrl+digit twin that works identically on both platforms.
+    if(e.key === "F3" || (e.ctrlKey && e.code === "Digit3")){
       e.preventDefault();
       companyModal();
       return;
     }
-    if(e.altKey && e.key === "F2"){
+    if((e.altKey && e.key === "F2") || (e.ctrlKey && e.shiftKey && e.code === "Digit2")){
       e.preventDefault();
       periodModal();
       return;
@@ -1978,7 +1988,7 @@ function bindGlobalShortcuts(){
     const content = document.getElementById("content");
 
     // F2 — change the voucher date
-    if(e.key === "F2"){
+    if(e.key === "F2" || (e.ctrlKey && e.code === "Digit2")){
       e.preventDefault();
       const cur = document.getElementById("v-date");
       dateModal("Change voucher date", (cur && cur.value) || todayISO(), (val)=>{
@@ -1989,13 +1999,13 @@ function bindGlobalShortcuts(){
       return;
     }
     // Ctrl+A — accept/save, Tally's classic save key (Alt+C also works)
-    if(e.ctrlKey && (e.key === "a" || e.key === "A")){
+    if(e.ctrlKey && e.code === "KeyA"){
       e.preventDefault();
       submitVoucher(content);
       return;
     }
     // Ctrl+R — repeat the narration from the last posted voucher
-    if(e.ctrlKey && (e.key === "r" || e.key === "R")){
+    if(e.ctrlKey && e.code === "KeyR"){
       e.preventDefault();
       const last = (state.vouchers || [])[0];
       if(last && last.narration){
@@ -2009,7 +2019,7 @@ function bindGlobalShortcuts(){
       return;
     }
     // Alt+D — remove the line the cursor is currently in
-    if(e.altKey && (e.key === "d" || e.key === "D")){
+    if(e.altKey && e.code === "KeyD"){
       const row = document.activeElement && document.activeElement.closest(".line-row");
       if(row){
         e.preventDefault();
@@ -2026,36 +2036,38 @@ function bindGlobalShortcuts(){
     }
 
     const typeMap = { F4:"Contra", F5:"Payment", F6:"Receipt", F7:"Journal", F8:"Sales", F9:"Purchase" };
-    if(typeMap[e.key]){
+    const codeMap = { Digit4:"Contra", Digit5:"Payment", Digit6:"Receipt", Digit7:"Journal", Digit8:"Sales", Digit9:"Purchase" };
+    const chosenType = typeMap[e.key] || (e.ctrlKey ? codeMap[e.code] : null);
+    if(chosenType){
       e.preventDefault();
-      state.draftType = typeMap[e.key];
+      state.draftType = chosenType;
       const sel = document.getElementById("v-type");
-      if(sel) sel.value = typeMap[e.key];
+      if(sel) sel.value = chosenType;
       renderEntry(content);
       return;
     }
-    if(e.altKey && (e.key === "c" || e.key === "C")){
+    if(e.altKey && e.code === "KeyC"){
       e.preventDefault();
       submitVoucher(content);
       return;
     }
     // Alt+G / Alt+T / Alt+I open the GST, TDS and Stock panels with focus already
     // in the first field — no mouse needed at any point.
-    if(e.altKey && (e.key === "g" || e.key === "G")){
+    if(e.altKey && e.code === "KeyG"){
       e.preventDefault();
       state.showGstPanel = true; state.showTdsPanel = false; state.showStockPanel = false;
       state.focusPanel = "gst";
       renderEntry(content);
       return;
     }
-    if(e.altKey && (e.key === "t" || e.key === "T")){
+    if(e.altKey && e.code === "KeyT"){
       e.preventDefault();
       state.showTdsPanel = true; state.showGstPanel = false; state.showStockPanel = false;
       state.focusPanel = "tds";
       renderEntry(content);
       return;
     }
-    if(e.altKey && (e.key === "i" || e.key === "I")){
+    if(e.altKey && e.code === "KeyI"){
       e.preventDefault();
       state.showStockPanel = true; state.showGstPanel = false; state.showTdsPanel = false;
       state.focusPanel = "stock";
