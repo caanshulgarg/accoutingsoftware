@@ -1469,7 +1469,7 @@ function renderEntry(content){
       <div class="totals-bar">
         <div>Debit: <b id="totals-debit">${fmtINR(totalDebit)}</b></div>
         <div>Credit: <b id="totals-credit">${fmtINR(totalCredit)}</b></div>
-        <div id="totals-status" style="color:${totalDebit===0&&totalCredit===0?'var(--muted)':balanced?'var(--ok)':'var(--err)'}">${totalDebit===0&&totalCredit===0 ? "—" : balanced ? "Balanced ✓" : `Out of balance by ${fmtINR(Math.abs(diff))}`}</div>
+        <div id="totals-status" style="color:${totalDebit===0&&totalCredit===0?'var(--muted)':balanced?'var(--ok)':'var(--err)'}">${totalDebit===0&&totalCredit===0 ? "—" : balanced ? "Balanced ✓ — Enter on narration to post" : `Short by ${fmtINR(Math.abs(diff))} on the ${diff>0?'credit':'debit'} side — Enter to add it`}</div>
       </div>
       <button class="form-btn" id="post-btn" style="margin-top:12px;width:160px;" ${!balanced?'disabled':''}>Post entry</button>
     </div>
@@ -1611,15 +1611,30 @@ function renderEntry(content){
       if(e.key !== "Enter") return;
       e.preventDefault();
       const isLast = idx === state.voucherLines.length - 1;
-      if(isLast && amtInput.value && parseFloat(amtInput.value) > 0){
-        const otherType = state.voucherLines[idx].type === "debit" ? "credit" : "debit";
-        addDraftLine(otherType);
-        state.focusLastLine = true;
-        renderEntry(content);
-      } else {
+
+      if(!isLast){
         const nextRow = content.querySelector(`.line-row[data-index="${idx+1}"]`);
         if(nextRow) nextRow.querySelector(".line-acc-input").focus();
+        return;
       }
+
+      // On the last line: work out what the entry is short by, and open a new
+      // line on whichever side is short, pre-filled with the exact difference.
+      // If it already balances, move to narration instead of adding a line.
+      const totals = draftTotals();
+      if(totals.diff === 0){
+        if(totals.debit > 0){
+          const narr = document.getElementById("v-narration");
+          if(narr){ narr.focus(); narr.select(); }
+        }
+        return;
+      }
+
+      // diff > 0 means debits exceed credits, so the shortfall is on the credit side
+      const shortSide = totals.diff > 0 ? "credit" : "debit";
+      addDraftLine(shortSide, Math.abs(totals.diff).toFixed(2));
+      state.focusLastLine = true;
+      renderEntry(content);
     });
   });
 
@@ -1636,6 +1651,10 @@ function renderEntry(content){
   document.getElementById("v-date").addEventListener("change", e=> state.draftDate = e.target.value);
   document.getElementById("v-type").addEventListener("change", e=> state.draftType = e.target.value);
   document.getElementById("v-narration").addEventListener("input", e=> state.draftNarration = e.target.value);
+  // Enter on narration posts the voucher — completes the keyboard-only loop
+  document.getElementById("v-narration").addEventListener("keydown", e=>{
+    if(e.key === "Enter"){ e.preventDefault(); submitVoucher(content); }
+  });
   document.getElementById("shortcuts-toggle").addEventListener("click", ()=>{
     state.showShortcuts = !state.showShortcuts;
     renderEntry(content);
@@ -2014,15 +2033,23 @@ function refreshEntryTotals(){
   if(crEl) crEl.textContent = fmtINR(totalCredit);
   if(stEl){
     stEl.textContent = (totalDebit===0 && totalCredit===0) ? "—"
-      : balanced ? "Balanced ✓"
-      : `Out of balance by ${fmtINR(Math.abs(diff))}`;
+      : balanced ? "Balanced ✓ — Enter on narration to post"
+      : `Short by ${fmtINR(Math.abs(diff))} on the ${diff>0?'credit':'debit'} side — Enter to add it`;
     stEl.style.color = (totalDebit===0 && totalCredit===0) ? "var(--muted)"
       : balanced ? "var(--ok)" : "var(--err)";
   }
   if(btn) btn.disabled = !balanced;
 }
-function addDraftLine(type){
-  state.voucherLines.push({ id: uid("ln"), accountId:"", type, amount:"" });
+function addDraftLine(type, amount){
+  state.voucherLines.push({ id: uid("ln"), accountId:"", type, amount: amount || "" });
+}
+
+// Current debit/credit totals and the signed difference for the draft voucher.
+// diff > 0 => debits exceed credits (credit side is short), and vice versa.
+function draftTotals(){
+  const debit = state.voucherLines.filter(l=>l.type==="debit").reduce((s,l)=>s+(parseFloat(l.amount)||0),0);
+  const credit = state.voucherLines.filter(l=>l.type==="credit").reduce((s,l)=>s+(parseFloat(l.amount)||0),0);
+  return { debit, credit, diff: Math.round((debit-credit)*100)/100 };
 }
 
 function renderLedger(content){
