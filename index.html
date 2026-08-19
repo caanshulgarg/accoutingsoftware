@@ -885,11 +885,9 @@ function renderEntry(content){
         ` : ""}
       </div>
       <div class="totals-bar">
-        <div>Debit: <b>${fmtINR(totalDebit)}</b></div>
-        <div>Credit: <b>${fmtINR(totalCredit)}</b></div>
-        <div style="color:${totalDebit===0&&totalCredit===0?'var(--muted)':balanced?'var(--ok)':'var(--err)'}">
-          ${totalDebit===0&&totalCredit===0 ? "—" : balanced ? "Balanced ✓" : `Out of balance by ${fmtINR(Math.abs(diff))}`}
-        </div>
+        <div>Debit: <b id="totals-debit">${fmtINR(totalDebit)}</b></div>
+        <div>Credit: <b id="totals-credit">${fmtINR(totalCredit)}</b></div>
+        <div id="totals-status" style="color:${totalDebit===0&&totalCredit===0?'var(--muted)':balanced?'var(--ok)':'var(--err)'}">${totalDebit===0&&totalCredit===0 ? "—" : balanced ? "Balanced ✓" : `Out of balance by ${fmtINR(Math.abs(diff))}`}</div>
       </div>
       <button class="form-btn" id="post-btn" style="margin-top:12px;width:160px;" ${!balanced?'disabled':''}>Post entry</button>
     </div>
@@ -916,6 +914,8 @@ function renderEntry(content){
       if(e.key === "Enter"){ e.preventDefault(); amtInput.focus(); }
     });
     // Enter on amount -> go to next line's account select, or create a new opposite-type line if this is the last one
+    // Select existing content on focus so typing overwrites instead of appending
+    amtInput.addEventListener("focus", e=> e.target.select());
     amtInput.addEventListener("keydown", e=>{
       if(e.key !== "Enter") return;
       e.preventDefault();
@@ -1217,9 +1217,36 @@ async function applyTdsLine(content){
 }
 
 
+// Updates a draft line's data WITHOUT re-rendering the form. Re-rendering on
+// every keystroke destroys and recreates the <input>, which loses cursor focus
+// after a single character — the entry screen must never do that.
 function updateDraftLine(id, patch){
   state.voucherLines = state.voucherLines.map(l=> l.id===id ? {...l,...patch} : l);
-  renderEntry(document.getElementById("content"));
+  refreshEntryTotals();
+}
+
+// Recomputes the totals bar and Post button state in place, leaving all
+// inputs (and the cursor) untouched.
+function refreshEntryTotals(){
+  const totalDebit = state.voucherLines.filter(l=>l.type==="debit").reduce((s,l)=>s+(parseFloat(l.amount)||0),0);
+  const totalCredit = state.voucherLines.filter(l=>l.type==="credit").reduce((s,l)=>s+(parseFloat(l.amount)||0),0);
+  const diff = Math.round((totalDebit-totalCredit)*100)/100;
+  const balanced = diff===0 && totalDebit>0;
+
+  const drEl = document.getElementById("totals-debit");
+  const crEl = document.getElementById("totals-credit");
+  const stEl = document.getElementById("totals-status");
+  const btn  = document.getElementById("post-btn");
+  if(drEl) drEl.textContent = fmtINR(totalDebit);
+  if(crEl) crEl.textContent = fmtINR(totalCredit);
+  if(stEl){
+    stEl.textContent = (totalDebit===0 && totalCredit===0) ? "—"
+      : balanced ? "Balanced ✓"
+      : `Out of balance by ${fmtINR(Math.abs(diff))}`;
+    stEl.style.color = (totalDebit===0 && totalCredit===0) ? "var(--muted)"
+      : balanced ? "var(--ok)" : "var(--err)";
+  }
+  if(btn) btn.disabled = !balanced;
 }
 function addDraftLine(type){
   state.voucherLines.push({ id: uid("ln"), accountId:"", type, amount:"" });
@@ -3158,7 +3185,7 @@ function renderInvoiceForm(area, content){
             <input class="form-input ii-qty" type="number" style="width:70px;" value="${it.qty}" />
             <input class="form-input ii-rate" type="number" style="width:100px;" value="${it.rate}" />
             <input class="form-input ii-gst" type="number" style="width:70px;" value="${it.gstRate}" />
-            <span style="width:100px;text-align:right;font-size:12.5px;">${fmtINR(amt)}</span>
+            <span class="ii-amount" data-amt-idx="${idx}" style="width:100px;text-align:right;font-size:12.5px;">${fmtINR(amt)}</span>
             <button class="icon-btn ii-remove">✕</button>
           </div>
         `;}).join("")}
@@ -3170,9 +3197,9 @@ function renderInvoiceForm(area, content){
       <div class="field" style="margin:14px 0;"><label>Terms / notes</label><input class="form-input" id="if-terms" value="${escapeHtml(d.terms)}" style="width:100%;" /></div>
 
       <div class="totals-bar" style="border-top:2px solid var(--border2);flex-direction:column;align-items:flex-end;gap:4px;">
-        <div>Subtotal: <b>${fmtINR(subtotal)}</b></div>
-        <div>GST: <b>${fmtINR(taxTotal)}</b></div>
-        <div style="font-size:15px;">Grand Total: <b>${fmtINR(grandTotal)}</b></div>
+        <div>Subtotal: <b id="inv-subtotal">${fmtINR(subtotal)}</b></div>
+        <div>GST: <b id="inv-taxtotal">${fmtINR(taxTotal)}</b></div>
+        <div style="font-size:15px;">Grand Total: <b id="inv-grandtotal">${fmtINR(grandTotal)}</b></div>
       </div>
       <div class="row" style="gap:8px;margin-top:12px;">
         <button class="form-btn" id="if-save-btn">Save &amp; Post</button>
@@ -3193,9 +3220,9 @@ function renderInvoiceForm(area, content){
     row.querySelector(".ii-desc").addEventListener("input", e=>{ d.items[idx].description = e.target.value; });
     row.querySelector(".ii-stock").addEventListener("change", e=>{ d.items[idx].stockItemId = e.target.value; });
     row.querySelector(".ii-hsn").addEventListener("input", e=>{ d.items[idx].hsnCode = e.target.value; });
-    row.querySelector(".ii-qty").addEventListener("input", e=>{ d.items[idx].qty = e.target.value; renderInvoicingBody(content); });
-    row.querySelector(".ii-rate").addEventListener("input", e=>{ d.items[idx].rate = e.target.value; renderInvoicingBody(content); });
-    row.querySelector(".ii-gst").addEventListener("input", e=>{ d.items[idx].gstRate = e.target.value; renderInvoicingBody(content); });
+    row.querySelector(".ii-qty").addEventListener("input", e=>{ d.items[idx].qty = e.target.value; refreshInvoiceTotals(); });
+    row.querySelector(".ii-rate").addEventListener("input", e=>{ d.items[idx].rate = e.target.value; refreshInvoiceTotals(); });
+    row.querySelector(".ii-gst").addEventListener("input", e=>{ d.items[idx].gstRate = e.target.value; refreshInvoiceTotals(); });
     row.querySelector(".ii-remove").addEventListener("click", ()=>{ d.items.splice(idx,1); renderInvoicingBody(content); });
   });
   document.getElementById("if-add-item-btn").addEventListener("click", ()=>{
@@ -3204,6 +3231,27 @@ function renderInvoiceForm(area, content){
   });
   document.getElementById("if-cancel-btn").addEventListener("click", ()=>{ state.invoiceDraft = null; renderInvoicingBody(content); });
   document.getElementById("if-save-btn").addEventListener("click", ()=> saveInvoice(content));
+}
+
+// Updates invoice line amounts and totals in place, without re-rendering the
+// form — same reason as refreshEntryTotals: re-rendering kills cursor focus.
+function refreshInvoiceTotals(){
+  const d = state.invoiceDraft;
+  if(!d) return;
+  let subtotal = 0, taxTotal = 0;
+  d.items.forEach((it, idx)=>{
+    const amt = (parseFloat(it.qty)||0)*(parseFloat(it.rate)||0);
+    subtotal += amt;
+    taxTotal += amt * ((parseFloat(it.gstRate)||0)/100);
+    const span = document.querySelector(`.ii-amount[data-amt-idx="${idx}"]`);
+    if(span) span.textContent = fmtINR(amt);
+  });
+  const sub = document.getElementById("inv-subtotal");
+  const tax = document.getElementById("inv-taxtotal");
+  const grand = document.getElementById("inv-grandtotal");
+  if(sub) sub.textContent = fmtINR(subtotal);
+  if(tax) tax.textContent = fmtINR(taxTotal);
+  if(grand) grand.textContent = fmtINR(subtotal + taxTotal);
 }
 
 async function saveInvoice(content){
@@ -3621,17 +3669,17 @@ function renderPayrollRunDraft(area, content){
         <div class="table-row" data-payslip-idx="${idx}">
           <span style="flex:1;">${escapeHtml(empName(p.employeeId))}</span>
           <span style="width:80px;text-align:right;"><input class="form-input ps-days" type="number" value="${p.daysPresent}" style="width:60px;text-align:right;padding:4px 6px;" /></span>
-          <span style="width:90px;text-align:right;">${fmtINR(p.gross_earnings)}</span>
-          <span style="width:80px;text-align:right;color:var(--muted);">${fmtINR(p.pf_employee)}</span>
-          <span style="width:80px;text-align:right;color:var(--muted);">${fmtINR(p.esi_employee)}</span>
-          <span style="width:70px;text-align:right;color:var(--muted);">${fmtINR(p.pt)}</span>
+          <span class="ps-gross" style="width:90px;text-align:right;">${fmtINR(p.gross_earnings)}</span>
+          <span class="ps-pf" style="width:80px;text-align:right;color:var(--muted);">${fmtINR(p.pf_employee)}</span>
+          <span class="ps-esi" style="width:80px;text-align:right;color:var(--muted);">${fmtINR(p.esi_employee)}</span>
+          <span class="ps-pt" style="width:70px;text-align:right;color:var(--muted);">${fmtINR(p.pt)}</span>
           <span style="width:90px;text-align:right;"><input class="form-input ps-tds" type="number" value="${p.tds}" style="width:75px;text-align:right;padding:4px 6px;" /></span>
-          <span style="width:100px;text-align:right;font-weight:700;">${fmtINR(netPay(p))}</span>
+          <span class="ps-net" style="width:100px;text-align:right;font-weight:700;">${fmtINR(netPay(p))}</span>
         </div>
       `).join("")}
       <div class="totals-bar" style="border-top:2px solid var(--border2);">
-        <div>Total Gross: <b>${fmtINR(totalGross)}</b></div>
-        <div>Total Net Pay: <b>${fmtINR(totalNet)}</b></div>
+        <div>Total Gross: <b id="pr-total-gross">${fmtINR(totalGross)}</b></div>
+        <div>Total Net Pay: <b id="pr-total-net">${fmtINR(totalNet)}</b></div>
       </div>
       <div class="row" style="gap:8px;margin-top:12px;">
         <button class="form-btn" id="payrun-post-btn">Post payroll run</button>
@@ -3646,11 +3694,13 @@ function renderPayrollRunDraft(area, content){
       const days = parseFloat(e.target.value)||0;
       const emp = state.employees.find(x=>x.id===d.payslips[idx].employeeId);
       d.payslips[idx] = { ...d.payslips[idx], daysPresent: days, ...computePayslip(emp, days, d.daysInMonth) };
-      renderPayrollRunDraft(area, content);
+      refreshPayrollRow(row, d.payslips[idx]);
+      refreshPayrollTotals(d);
     });
     row.querySelector(".ps-tds").addEventListener("input", e=>{
       d.payslips[idx].tds = parseFloat(e.target.value)||0;
-      renderPayrollRunDraft(area, content);
+      refreshPayrollRow(row, d.payslips[idx]);
+      refreshPayrollTotals(d);
     });
   });
   document.getElementById("payrun-cancel-btn").addEventListener("click", ()=>{ state.payrollRunDraft = null; renderPayrollBody(content); });
@@ -3660,6 +3710,25 @@ function renderPayrollRunDraft(area, content){
 function netPay(p){
   const deductions = p.pf_employee + p.esi_employee + p.pt + p.tds + (p.other_deductions||0);
   return Math.round((p.gross_earnings - deductions)*100)/100;
+}
+
+// In-place row and totals updates for the payroll draft — avoids re-rendering
+// (which would drop cursor focus mid-typing).
+function refreshPayrollRow(row, p){
+  const set = (cls, val)=>{ const el = row.querySelector(cls); if(el) el.textContent = fmtINR(val); };
+  set(".ps-gross", p.gross_earnings);
+  set(".ps-pf", p.pf_employee);
+  set(".ps-esi", p.esi_employee);
+  set(".ps-pt", p.pt);
+  set(".ps-net", netPay(p));
+}
+function refreshPayrollTotals(d){
+  const totalGross = d.payslips.reduce((s,p)=>s+p.gross_earnings,0);
+  const totalNet = d.payslips.reduce((s,p)=>s+netPay(p),0);
+  const g = document.getElementById("pr-total-gross");
+  const n = document.getElementById("pr-total-net");
+  if(g) g.textContent = fmtINR(totalGross);
+  if(n) n.textContent = fmtINR(totalNet);
 }
 
 async function postPayrollRun(content){
