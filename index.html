@@ -4,11 +4,51 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Practice Suite</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/supabase-js/2.45.4/supabase.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.0.4/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js"></script>
+<script>
+// Fallback loader: if jsDelivr is blocked, retry each missing library from unpkg,
+// then cdnjs. Runs synchronously-ish via document.write-free dynamic injection and
+// is awaited by init() before the app boots.
+window.__libFallbacks = [
+  { check: () => typeof window.supabase !== "undefined", urls: [
+      "https://unpkg.com/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js",
+      "https://cdnjs.cloudflare.com/ajax/libs/supabase-js/2.45.4/supabase.min.js" ] },
+  { check: () => typeof window.Papa !== "undefined", urls: [
+      "https://unpkg.com/papaparse@5.4.1/papaparse.min.js",
+      "https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js" ] },
+  { check: () => typeof window.XLSX !== "undefined", urls: [
+      "https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js",
+      "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" ] },
+  { check: () => typeof window.pdfjsLib !== "undefined", urls: [
+      "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js",
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js" ] },
+  { check: () => typeof window.Tesseract !== "undefined", urls: [
+      "https://unpkg.com/tesseract.js@5.0.4/dist/tesseract.min.js",
+      "https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.0.4/tesseract.min.js" ] },
+];
+window.__loadScript = function(url){
+  return new Promise((resolve)=>{
+    const s = document.createElement("script");
+    s.src = url;
+    s.onload = ()=> resolve(true);
+    s.onerror = ()=> resolve(false);
+    document.head.appendChild(s);
+  });
+};
+window.__ensureLibs = async function(){
+  for(const lib of window.__libFallbacks){
+    if(lib.check()) continue;
+    for(const url of lib.urls){
+      await window.__loadScript(url);
+      if(lib.check()) break;
+    }
+  }
+};
+</script>
 <style>
   :root{
     --bg:#0b0c0f; --panel:#111318; --panel2:#181a20; --border:#1f2128; --border2:#262932;
@@ -241,17 +281,23 @@ const SUPABASE_URL = "https://sgbkurfhcctnjbtkpwxl.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNnYmt1cmZoY2N0bmpidGtwd3hsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcxNDk0NjksImV4cCI6MjEwMjcyNTQ2OX0.LzBq9ow-p0QbjG2XgtjyRqzz3F9AjkJg1sEXxfGCPoo";
 
 let supa = null;
-try {
-  if (SUPABASE_URL !== "YOUR_SUPABASE_URL" && SUPABASE_ANON_KEY !== "YOUR_SUPABASE_ANON_KEY") {
-    if (typeof window.supabase === "undefined") {
-      throw new Error("Supabase library failed to load from the CDN. Check your internet connection and refresh — if this keeps happening, an ad-blocker or network filter may be blocking cdnjs.cloudflare.com.");
-    }
-    supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  } else {
+
+// Creates the Supabase client. Called from init() AFTER the library fallback
+// loader has had a chance to fetch supabase-js from an alternate CDN.
+function initSupabaseClient(){
+  if (SUPABASE_URL === "YOUR_SUPABASE_URL" || SUPABASE_ANON_KEY === "YOUR_SUPABASE_ANON_KEY") {
     document.getElementById("config-banner").style.display = "block";
+    return false;
   }
-} catch (e) {
-  showFatalError("Could not connect to Supabase", e.message);
+  if (typeof window.supabase === "undefined") {
+    showFatalError(
+      "Could not load the Supabase library",
+      "Tried jsDelivr, unpkg, and cdnjs — all were unreachable.<br/><br/>This is usually a network filter, corporate firewall, or ad-blocker blocking CDN domains. Try a different network (e.g. mobile hotspot) or disable the blocker for this site, then reload."
+    );
+    return false;
+  }
+  supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  return true;
 }
 
 // Shows a visible, readable error instead of leaving the page blank when
@@ -1577,7 +1623,7 @@ async function handlePdfStatementFile(file, content){
   showToast("Reading PDF…");
   try{
     if(typeof pdfjsLib !== "undefined" && !pdfjsLib.GlobalWorkerOptions.workerSrc){
-      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
     }
     const buf = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
@@ -1915,7 +1961,7 @@ async function handleScanFile(file, content){
     let text = "";
     if(ext === "pdf"){
       if(typeof pdfjsLib !== "undefined" && !pdfjsLib.GlobalWorkerOptions.workerSrc){
-        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
       }
       const buf = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
@@ -4073,7 +4119,13 @@ function exportGstr3bJson(g){
    ============================================================ */
 async function init(){
   bindGlobalShortcuts();
-  if(!supa){ showScreen("app"); renderCompanyList(); renderMain(); return; }
+
+  // Give any blocked CDN a chance to load from a mirror before we give up.
+  if(window.__ensureLibs){
+    try { await window.__ensureLibs(); } catch(e) { /* fall through to the check below */ }
+  }
+  if(!initSupabaseClient()) return;
+
   try {
     const { data: { session }, error } = await supa.auth.getSession();
     if(error) throw error;
