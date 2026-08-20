@@ -152,6 +152,10 @@ window.__ensureLibs = async function(){
   .acc-item.create-new{color:var(--accent);font-weight:600;border-top:1px solid var(--border);}
   .acc-empty{padding:10px;font-size:12px;color:var(--muted);}
   .line-row{overflow:visible;}
+  .line-type-btn{width:36px;flex-shrink:0;border:1px solid var(--border2);background:var(--panel2);
+    border-radius:6px;padding:7px 0;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;}
+  .line-type-btn.debit{color:#1d4ed8;background:#dbeafe;border-color:#bfdbfe;}
+  .line-type-btn.credit{color:#b45309;background:#fef3c7;border-color:#fde68a;}
 </style>
 </head>
 <body>
@@ -1818,11 +1822,12 @@ function renderDayBook(content){
           ${open ? `
             <div style="background:var(--panel2);padding:10px 14px;">
               <div class="table-header" style="margin-bottom:4px;">
-                <span style="flex:1;">Ledger</span><span style="width:110px;text-align:right;">Debit</span><span style="width:110px;text-align:right;">Credit</span>
+                <span style="width:34px;"></span><span style="flex:1;">Particulars</span><span style="width:110px;text-align:right;">Debit</span><span style="width:110px;text-align:right;">Credit</span>
               </div>
               ${lines.map(l=>`
                 <div class="table-row" style="border:none;padding:5px 4px;">
-                  <span style="flex:1;font-size:12.5px;">${escapeHtml(accName(l.account_id))}
+                  <span style="width:34px;font-size:12px;font-weight:700;color:${l.line_type==='debit'?'#1d4ed8':'#b45309'};">${l.line_type==='debit'?'Dr':'To'}</span>
+                  <span style="flex:1;font-size:12.5px;${l.line_type==='credit'?'padding-left:14px;':''}">${escapeHtml(accName(l.account_id))}
                     ${l.tax_kind?`<span class="match-badge" style="background:#dbeafe;color:#1d4ed8;">${l.tax_kind.toUpperCase()} ${l.tax_rate||''}%</span>`:''}
                   </span>
                   <span style="width:110px;text-align:right;font-size:12.5px;">${l.line_type==='debit'?fmtINR(l.amount):''}</span>
@@ -1989,7 +1994,7 @@ function renderEntry(content){
         <span><b>${IS_MAC?'Ctrl+2':'F2'}</b> date</span>
         <span><b>${IS_MAC?'Ctrl+3':'F3'}</b> company</span>
         <span><b>${IS_MAC?'Ctrl+Shift+2':'Alt+F2'}</b> period</span>
-        <span><b>Type</b> to search ledgers</span><span><b>↑↓</b> pick</span><span><b>Enter</b> select / next / balance line</span>
+        <span><b>D</b> / <b>T</b> switch Dr/To</span><span><b>Type</b> to search ledgers</span><span><b>↑↓</b> pick</span><span><b>Enter</b> select / next / balance line</span>
         <span><b>${ALT}+G</b> GST</span><span><b>${ALT}+T</b> TDS</span><span><b>${ALT}+I</b> Stock</span>
         <span><b>Ctrl+R</b> repeat narration</span><span><b>${ALT}+2</b> duplicate last voucher</span><span><b>${ALT}+B</b> bill ref / cost centre / stock</span><span><b>${ALT}+D</b> delete line</span>
         <span><b>Ctrl+A</b> save</span><span><b>Esc</b> close panel / clear</span>
@@ -2018,20 +2023,17 @@ function renderEntry(content){
         </div>` : ''}
 
       <div class="line-header">
-        <span style="flex:1;">Account</span><span style="width:90px;">Type</span><span style="width:130px;">Amount</span><span style="width:28px;"></span>
+        <span style="width:40px;">Dr/To</span><span style="flex:1;">Particulars</span><span style="width:130px;">Amount</span><span style="width:56px;"></span>
       </div>
       <div id="lines-wrap">
         ${state.voucherLines.map((l,idx)=>`
           <div class="line-row" data-line="${l.id}" data-index="${idx}">
-            <div class="acc-wrap" style="position:relative;flex:1;">
+            <button type="button" class="line-type-btn ${l.type}" title="Click or press D / T to switch (Dr = debit, To = credit)">${l.type==='debit'?'Dr':'To'}</button>
+            <div class="acc-wrap" style="position:relative;flex:1;${l.type==='credit'?'padding-left:22px;':''}">
               <input class="form-input line-acc-input" placeholder="Type ledger name…" autocomplete="off"
                      value="${escapeHtml(ledgerLabel(l.accountId))}" style="width:100%;" />
               <div class="acc-dropdown"></div>
             </div>
-            <select class="form-input line-type" style="width:90px;">
-              <option value="debit" ${l.type==='debit'?'selected':''}>Debit</option>
-              <option value="credit" ${l.type==='credit'?'selected':''}>Credit</option>
-            </select>
             <input class="form-input line-amount" type="number" placeholder="0.00" style="width:130px;" value="${l.amount}" />
             <button class="icon-btn line-detail" title="Bill reference / cost centre / stock (${ALT}+B)">⋯</button>
             <button class="icon-btn line-remove">✕</button>
@@ -2195,10 +2197,17 @@ function renderEntry(content){
     const idx = parseInt(row.dataset.index, 10);
     const accInput = row.querySelector(".line-acc-input");
     const dropdown = row.querySelector(".acc-dropdown");
-    const typeSel = row.querySelector(".line-type");
+    const typeBtn = row.querySelector(".line-type-btn");
     const amtInput = row.querySelector(".line-amount");
 
-    typeSel.addEventListener("change", e=>updateDraftLine(id,{type:e.target.value}));
+    // Dr <-> To toggle. Tally users flip sides constantly, so this is a click
+    // or a single keystroke, never a dropdown.
+    const flipSide = ()=>{
+      const line = state.voucherLines.find(l=>l.id===id);
+      updateDraftLine(id, { type: line.type === "debit" ? "credit" : "debit" });
+      renderEntry(content);
+    };
+    typeBtn.addEventListener("click", flipSide);
     amtInput.addEventListener("input", e=>updateDraftLine(id,{amount:e.target.value}));
     row.querySelector(".line-remove").addEventListener("click", ()=>{
       state.voucherLines = state.voucherLines.filter(l=>l.id!==id);
@@ -2287,6 +2296,21 @@ function renderEntry(content){
     accInput.addEventListener("input", ()=>{
       updateDraftLine(id, { accountId: "" });   // typing invalidates any prior pick
       openDropdown(accInput.value);
+    });
+
+    // "d" or "t" as the very first keystroke in an empty ledger field sets the
+    // side and clears itself — matches how Tally operators work.
+    accInput.addEventListener("keydown", e=>{
+      if(accInput.value !== "") return;
+      if(e.code === "KeyD" && !e.ctrlKey && !e.altKey && !e.metaKey){
+        e.preventDefault();
+        const line = state.voucherLines.find(l=>l.id===id);
+        if(line.type !== "debit"){ updateDraftLine(id,{type:"debit"}); renderEntry(content); }
+      } else if(e.code === "KeyT" && !e.ctrlKey && !e.altKey && !e.metaKey){
+        e.preventDefault();
+        const line = state.voucherLines.find(l=>l.id===id);
+        if(line.type !== "credit"){ updateDraftLine(id,{type:"credit"}); renderEntry(content); }
+      }
     });
     accInput.addEventListener("blur", ()=>{
       setTimeout(()=>{
