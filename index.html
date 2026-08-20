@@ -175,9 +175,10 @@ window.__ensureLibs = async function(){
     <div id="auth-error"></div>
     <div class="field" style="margin-bottom:10px;"><label>Email</label><input class="form-input" id="auth-email" type="email" placeholder="you@firm.com" /></div>
     <div class="field" style="margin-bottom:14px;" id="auth-name-field"><label>Full name</label><input class="form-input" id="auth-name" placeholder="Your name" /></div>
+    <div class="field" style="margin-bottom:14px;" id="auth-org-field"><label>Firm / organisation name</label><input class="form-input" id="auth-org" placeholder="e.g. Garg Shekhar &amp; Company" /></div>
     <div class="field" style="margin-bottom:16px;"><label>Password</label><input class="form-input" id="auth-password" type="password" placeholder="••••••••" /></div>
     <button class="form-btn" id="auth-submit" style="width:100%;">Log in</button>
-    <div id="auth-hint">The first person to ever sign up becomes Super Admin automatically. Everyone after that starts as <b>Pending</b> until an admin assigns their role.</div>
+    <div id="auth-hint">Signing up creates your firm's own workspace, and you become its Super Admin. Your data is completely separate from every other firm. Team members you invite from the Admin Panel join your workspace automatically.</div>
   </div>
 </div>
 
@@ -230,6 +231,7 @@ window.__ensureLibs = async function(){
     <nav id="nav-list">
       <button class="nav-item active" data-tab="entry">✎ Voucher Entry</button>
       <button class="nav-item" data-tab="ledger">▤ Ledger</button>
+      <button class="nav-item" data-tab="daybook">📖 Day Book</button>
       <button class="nav-item" data-tab="coa">▦ Chart of Accounts</button>
       <button class="nav-item" data-tab="bank_recon">⇄ Bank Reconciliation</button>
       <button class="nav-item" data-tab="scan_bill">📷 Scan Bill/Receipt</button>
@@ -431,6 +433,15 @@ let state = {
   periodFrom: null,
   periodTo: null,
   voucherSupplyType: 'intra',
+  dayBookSearch: '',
+  dayBookType: 'all',
+  dayBookOpen: null,
+  costCentres: [],
+  billRefs: [],
+  lineDetailOpen: null,
+  singleEntryAccountId: null,
+  organisation: null,
+  invitations: [],
 };
 
 const MODULES = [
@@ -485,7 +496,9 @@ async function loadCompanies(){
   return data;
 }
 async function createCompany(name, type){
-  const { data, error } = await supa.from("companies").insert({ name, type }).select().single();
+  const { data, error } = await supa.from("companies")
+    .insert({ name, type, org_id: state.profile ? state.profile.org_id : null })
+    .select().single();
   if(error){ showToast("Error: " + error.message, "err"); return null; }
 
   // Seed the 28 predefined Tally-style account groups for this company
@@ -529,6 +542,27 @@ async function loadAccounts(companyId){
   if(error){ showToast("Error loading accounts: " + error.message, "err"); return []; }
   return data;
 }
+async function loadCostCentres(companyId){
+  const { data, error } = await supa.from("cost_centres").select("*").eq("company_id", companyId).order("name");
+  if(error){ return []; }
+  return data;
+}
+async function createCostCentre(companyId, name, parentId){
+  const { data, error } = await supa.from("cost_centres").insert({ company_id: companyId, name, parent_id: parentId||null }).select().single();
+  if(error){ showToast("Error: " + error.message, "err"); return null; }
+  return data;
+}
+async function deleteCostCentre(id){
+  const { error } = await supa.from("cost_centres").delete().eq("id", id);
+  if(error){ showToast("Can't delete — cost centre is in use", "err"); return false; }
+  return true;
+}
+async function loadBillReferences(companyId){
+  const { data, error } = await supa.from("bill_references").select("*").eq("company_id", companyId);
+  if(error){ return []; }
+  return data;
+}
+
 async function loadAccountGroups(companyId){
   const { data, error } = await supa.from("account_groups").select("*").eq("company_id", companyId).order("name");
   if(error){ showToast("Error loading account groups: " + error.message, "err"); return []; }
@@ -621,20 +655,52 @@ function classifyMatch(bankLine, candidateVoucherLines, accountId){
 }
 
 async function postVoucher(companyId, date, type, narration, lines){
+  // Ask the database for the next number in this company + type series
+  let vNo = null;
+  try {
+    const { data } = await supa.rpc("next_voucher_number", { p_company_id: companyId, p_type: type });
+    vNo = data || null;
+  } catch(e) { /* numbering is best-effort; never block a posting */ }
   const { data: voucher, error } = await supa
     .from("vouchers")
-    .insert({ company_id: companyId, voucher_date: date, voucher_type: type, narration, source: "manual", supply_type: state.voucherSupplyType || "intra" })
+    .insert({ company_id: companyId, voucher_date: date, voucher_type: type, narration, source: "manual", supply_type: state.voucherSupplyType || "intra", voucher_number: vNo })
     .select().single();
   if(error){ showToast("Error: " + error.message, "err"); return false; }
   const rows = lines.map(l => ({ voucher_id: voucher.id, account_id: l.accountId, line_type: l.type, amount: l.amount,
-    tax_kind: l.taxKind || null, tax_rate: l.taxRate ?? null, taxable_value: l.taxableValue ?? null }));
-  const { error: err2 } = await supa.from("voucher_lines").insert(rows);
+    tax_kind: l.taxKind || null, tax_rate: l.taxRate ?? null, taxable_value: l.taxableValue ?? null,
+    cost_centre_id: l.costCentreId || null }));
+  const { data: insertedLines, error: err2 } = await supa.from("voucher_lines").insert(rows).select();
   if(err2){
     // Roll back the orphaned voucher header so a failed post doesn't leave an empty entry behind
     await supa.from("vouchers").delete().eq("id", voucher.id);
     showToast("Error posting lines: " + err2.message, "err");
     return false;
   }
+
+  // Bill-wise references, matched back to the line they belong to
+  const billRows = [];
+  lines.forEach((l, i)=>{
+    if(!l.billName || !insertedLines[i]) return;
+    billRows.push({
+      company_id: companyId, voucher_line_id: insertedLines[i].id, account_id: l.accountId,
+      bill_name: l.billName, ref_type: l.billRefType || "new",
+      bill_date: date, due_date: l.billDueDate || null, amount: l.amount,
+    });
+  });
+  if(billRows.length) await supa.from("bill_references").insert(billRows);
+
+  // Stock movements for lines that carried qty/rate
+  const stockRows = [];
+  lines.forEach(l=>{
+    if(!l.stockItemId || !(parseFloat(l.stockQty)>0)) return;
+    stockRows.push({
+      company_id: companyId, stock_item_id: l.stockItemId, voucher_id: voucher.id,
+      movement_date: date, direction: l.type === "debit" ? "in" : "out",
+      qty: parseFloat(l.stockQty), rate: parseFloat(l.stockRate)||0,
+    });
+  });
+  if(stockRows.length) await supa.from("stock_movements").insert(stockRows);
+
   return true;
 }
 async function deleteVoucher(id){
@@ -698,6 +764,8 @@ async function refreshCompanyData(){
   state.accountGroups = await loadAccountGroups(state.activeCompanyId);
   state._groupsLoadedFor = state.activeCompanyId;
   state.vouchers = await loadVouchers(state.activeCompanyId);
+  state.costCentres = await loadCostCentres(state.activeCompanyId);
+  state.billRefs = await loadBillReferences(state.activeCompanyId);
   state.bankAccountId = null;
   state.bankLines = [];
   state._bankLinesLoadedFor = {};
@@ -715,7 +783,7 @@ async function refreshCompanyData(){
    ============================================================ */
 function renderMain(){
   const company = state.companies.find(c=>c.id===state.activeCompanyId);
-  const titles = { entry: "Voucher Entry", ledger: "Ledger", coa: "Chart of Accounts", admin: "Admin Panel", bank_recon: "Bank Reconciliation", scan_bill: "Scan Bill/Receipt", reports: "Reports", bulk_import: "Bulk Import", inventory: "Inventory", invoicing: "Invoices", payroll: "Payroll", gst_filing: "GST Filing" };
+  const titles = { entry: "Voucher Entry", ledger: "Ledger", daybook: "Day Book", coa: "Chart of Accounts", admin: "Admin Panel", bank_recon: "Bank Reconciliation", scan_bill: "Scan Bill/Receipt", reports: "Reports", bulk_import: "Bulk Import", inventory: "Inventory", invoicing: "Invoices", payroll: "Payroll", gst_filing: "GST Filing" };
   document.getElementById("topbar-title").textContent = titles[state.tab];
   const periodTxt = (state.periodFrom && state.periodTo) ? `  ·  Period: ${state.periodFrom} to ${state.periodTo}` : "";
   document.getElementById("topbar-sub").textContent = state.tab==="admin" ? "Manage team roles & permissions" : ((company ? company.name : "No company selected") + periodTxt);
@@ -727,7 +795,7 @@ function renderMain(){
     renderAdminPanel(content);
     return;
   }
-  const permModule = state.tab === "scan_bill" ? "entry" : state.tab === "bulk_import" ? "companies" : state.tab === "gst_filing" ? "invoicing" : state.tab;
+  const permModule = state.tab === "scan_bill" ? "entry" : state.tab === "bulk_import" ? "companies" : state.tab === "gst_filing" ? "invoicing" : state.tab === "daybook" ? "ledger" : state.tab;
   if(!canView(permModule)){
     content.innerHTML = `<div class="empty-wrap"><div style="font-size:34px;">🔒</div><div class="empty-title">No access</div><div class="empty-sub">Ask your admin to grant you access to this section.</div></div>`;
     return;
@@ -756,6 +824,7 @@ function renderMain(){
   if(state.tab === "coa") renderCOA(content);
   else if(state.tab === "entry") renderEntry(content);
   else if(state.tab === "ledger") renderLedger(content);
+  else if(state.tab === "daybook") renderDayBook(content);
   else if(state.tab === "bank_recon") renderBankRecon(content);
   else if(state.tab === "scan_bill") renderScanBill(content);
   else if(state.tab === "reports") renderReports(content);
@@ -995,6 +1064,20 @@ function renderCOABody(content){
 
 // ---- Ledger type-ahead helpers ----
 
+// Current balance of a ledger from all posted vouchers, shown while picking it.
+function ledgerBalanceLabel(acc){
+  let bal = (parseFloat(acc.opening_balance) || 0) * (acc.opening_balance_type === "credit" ? -1 : 1);
+  (state.vouchers||[]).forEach(v=>{
+    (v.voucher_lines||[]).forEach(l=>{
+      if(l.account_id !== acc.id) return;
+      bal += (l.line_type === "debit" ? 1 : -1) * (parseFloat(l.amount)||0);
+    });
+  });
+  bal = Math.round(bal*100)/100;
+  if(bal === 0) return "nil";
+  return `${fmtINR(Math.abs(bal))} ${bal>0?'Dr':'Cr'}`;
+}
+
 function groupNameFor(acc){
   const g = (state.accountGroups||[]).find(x=>x.id===acc.group_id);
   return g ? g.name : "Ungrouped";
@@ -1106,6 +1189,23 @@ async function quickCreateLedger(name){
     tds_applicable: result.tdsApplicable,
     tds_section: result.tdsSection,
     tds_rate: result.tdsRate,
+    is_party: result.isParty,
+    gstin: result.gstin,
+    pan: result.pan,
+    state_name: result.stateName,
+    state_code: result.stateCode,
+    registration_type: result.registrationType,
+    address_line1: result.address1,
+    city: result.city,
+    pincode: result.pincode,
+    contact_person: result.contactPerson,
+    phone: result.phone,
+    email: result.email,
+    credit_period_days: result.creditDays,
+    credit_limit: result.creditLimit,
+    msme_udyam: result.msme,
+    bank_account_no: result.bankAc,
+    bank_ifsc: result.ifsc,
   });
   if(acc){
     state.coa.push(acc);
@@ -1216,6 +1316,73 @@ function ledgerCreateModal(ledgerName, groups){
           <div style="font-size:11px;color:var(--muted2);margin-top:6px;">The new sub-group inherits its parent's nature and is selected automatically.</div>
         </div>
 
+        <div id="lcm-party-section" style="display:none;border-top:1px solid var(--border);margin-top:10px;padding-top:10px;">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">
+            Party details <span style="font-weight:400;text-transform:none;letter-spacing:0;">— enter GSTIN and state + PAN fill themselves</span>
+          </div>
+          <div class="row" style="gap:8px;flex-wrap:wrap;">
+            <div class="field" style="width:190px;"><label>GSTIN</label>
+              <input class="form-input" id="lcm-gstin" placeholder="07ABCDE1234F1Z5" maxlength="15" style="width:100%;text-transform:uppercase;" />
+            </div>
+            <div class="field" style="width:130px;"><label>PAN</label>
+              <input class="form-input" id="lcm-pan" placeholder="ABCDE1234F" maxlength="10" style="width:100%;text-transform:uppercase;" />
+            </div>
+            <div class="field" style="flex:1;min-width:150px;"><label>State</label>
+              <input class="form-input" id="lcm-state" placeholder="auto from GSTIN" style="width:100%;" />
+            </div>
+          </div>
+          <div id="lcm-gstin-msg" style="font-size:11px;margin:4px 0 8px;"></div>
+          <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+            <div class="field" style="width:150px;"><label>Registration type</label>
+              <select class="form-input" id="lcm-regtype" style="width:100%;">
+                <option value="regular">Regular</option>
+                <option value="composition">Composition</option>
+                <option value="unregistered">Unregistered</option>
+                <option value="consumer">Consumer</option>
+                <option value="sez">SEZ</option>
+                <option value="overseas">Overseas</option>
+              </select>
+            </div>
+            <div class="field" style="flex:1;min-width:180px;"><label>Address</label>
+              <input class="form-input" id="lcm-addr1" placeholder="Street / building" style="width:100%;" />
+            </div>
+            <div class="field" style="width:130px;"><label>City</label>
+              <input class="form-input" id="lcm-city" style="width:100%;" />
+            </div>
+            <div class="field" style="width:100px;"><label>PIN</label>
+              <input class="form-input" id="lcm-pin" maxlength="6" style="width:100%;" />
+            </div>
+          </div>
+          <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+            <div class="field" style="flex:1;min-width:140px;"><label>Contact person</label>
+              <input class="form-input" id="lcm-contact" style="width:100%;" />
+            </div>
+            <div class="field" style="width:140px;"><label>Phone</label>
+              <input class="form-input" id="lcm-phone" style="width:100%;" />
+            </div>
+            <div class="field" style="flex:1;min-width:160px;"><label>Email</label>
+              <input class="form-input" id="lcm-email" type="email" style="width:100%;" />
+            </div>
+          </div>
+          <div class="row" style="gap:8px;flex-wrap:wrap;">
+            <div class="field" style="width:130px;"><label>Credit days</label>
+              <input class="form-input" id="lcm-creditdays" type="number" placeholder="0" style="width:100%;" />
+            </div>
+            <div class="field" style="width:150px;"><label>Credit limit</label>
+              <input class="form-input" id="lcm-creditlimit" type="number" placeholder="0" style="width:100%;" />
+            </div>
+            <div class="field" style="width:150px;"><label>MSME / Udyam no.</label>
+              <input class="form-input" id="lcm-msme" style="width:100%;" />
+            </div>
+            <div class="field" style="flex:1;min-width:150px;"><label>Bank A/c &amp; IFSC</label>
+              <div class="row" style="gap:6px;">
+                <input class="form-input" id="lcm-bankac" placeholder="A/c no." style="flex:1;" />
+                <input class="form-input" id="lcm-ifsc" placeholder="IFSC" style="width:110px;text-transform:uppercase;" />
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div id="lcm-error" style="display:none;color:var(--err);font-size:12px;margin-bottom:8px;"></div>
 
         <div class="row" style="gap:8px;margin-top:10px;">
@@ -1256,6 +1423,43 @@ function ledgerCreateModal(ledgerName, groups){
     tdsSec.addEventListener("change", ()=>{
       const opt = tdsSec.options[tdsSec.selectedIndex];
       tdsRate.value = opt ? opt.dataset.rate : "";
+    });
+
+    // ---- Party details: shown only for debtor/creditor-type groups ----
+    const partySection = overlay.querySelector("#lcm-party-section");
+    const gstinEl = overlay.querySelector("#lcm-gstin");
+    const panEl   = overlay.querySelector("#lcm-pan");
+    const stateEl = overlay.querySelector("#lcm-state");
+    const gstinMsg= overlay.querySelector("#lcm-gstin-msg");
+    let parsedGstin = null;
+
+    const isPartyGroup = (g)=> !!g && /debtor|creditor|advance|deposit|loan|branch/i.test(g.name);
+    const togglePartySection = ()=>{
+      partySection.style.display = isPartyGroup(selectedGroup) ? "block" : "none";
+    };
+
+    gstinEl.addEventListener("input", ()=>{
+      const raw = gstinEl.value.toUpperCase();
+      gstinEl.value = raw;
+      if(raw.length < 15){
+        gstinMsg.textContent = raw.length ? `${15-raw.length} more character${15-raw.length>1?'s':''}…` : "";
+        gstinMsg.style.color = "var(--muted2)";
+        parsedGstin = null;
+        return;
+      }
+      const r = parseGstin(raw);
+      if(r.valid){
+        parsedGstin = r;
+        panEl.value = r.pan;
+        stateEl.value = r.stateName;
+        const holder = panHolderType(r.pan);
+        gstinMsg.textContent = `✓ ${r.stateName} (code ${r.stateCode}) · PAN ${r.pan}${holder?` · ${holder}`:''}`;
+        gstinMsg.style.color = "var(--ok)";
+      } else {
+        parsedGstin = null;
+        gstinMsg.textContent = r.error || "Invalid GSTIN";
+        gstinMsg.style.color = "var(--err)";
+      }
     });
 
     // Pre-tick GST for sales/purchase ledgers, since those almost always carry it
@@ -1316,6 +1520,7 @@ function ledgerCreateModal(ledgerName, groups){
       searchEl.value = groupPath(g);
       closeList();
       clearErr();
+      togglePartySection();
       obEl.focus();
     };
 
@@ -1379,6 +1584,23 @@ function ledgerCreateModal(ledgerName, groups){
         tdsApplicable: tdsChk.checked,
         tdsSection: tdsChk.checked ? tdsSec.value : null,
         tdsRate: tdsChk.checked ? parseFloat(tdsRate.value) || 0 : 0,
+        isParty: isPartyGroup(selectedGroup),
+        gstin: gstinEl.value.trim() || null,
+        pan: panEl.value.trim().toUpperCase() || null,
+        stateName: stateEl.value.trim() || null,
+        stateCode: parsedGstin ? parsedGstin.stateCode : null,
+        registrationType: overlay.querySelector("#lcm-regtype").value,
+        address1: overlay.querySelector("#lcm-addr1").value.trim() || null,
+        city: overlay.querySelector("#lcm-city").value.trim() || null,
+        pincode: overlay.querySelector("#lcm-pin").value.trim() || null,
+        contactPerson: overlay.querySelector("#lcm-contact").value.trim() || null,
+        phone: overlay.querySelector("#lcm-phone").value.trim() || null,
+        email: overlay.querySelector("#lcm-email").value.trim() || null,
+        creditDays: parseInt(overlay.querySelector("#lcm-creditdays").value,10) || 0,
+        creditLimit: parseFloat(overlay.querySelector("#lcm-creditlimit").value) || 0,
+        msme: overlay.querySelector("#lcm-msme").value.trim() || null,
+        bankAc: overlay.querySelector("#lcm-bankac").value.trim() || null,
+        ifsc: overlay.querySelector("#lcm-ifsc").value.trim().toUpperCase() || null,
       });
     };
     const cancel = ()=>{ document.body.removeChild(overlay); resolve(null); };
@@ -1393,6 +1615,7 @@ function ledgerCreateModal(ledgerName, groups){
     });
 
     // Land on the group field if we couldn't guess; otherwise straight to amount-ish flow
+    togglePartySection();
     setTimeout(()=> (guessed ? obEl : searchEl).focus(), 30);
   });
 }
@@ -1489,6 +1712,218 @@ function findTaxLedgerId(name, nature){
   return null;
 }
 
+/* ---- GSTIN parsing ----
+   A GSTIN is 15 characters: SS PPPPPPPPPP E Z C
+     [0-1]   state code
+     [2-11]  the holder's PAN
+     [12]    entity number for that PAN in that state
+     [13]    'Z' by default
+     [14]    checksum
+   So entering the GSTIN gives us the state and PAN for free. */
+const GST_CODE_TO_STATE = Object.fromEntries(
+  Object.entries(GST_STATE_CODES).map(([name, code]) => [code, name.replace(/\b\w/g, ch=>ch.toUpperCase())])
+);
+
+function parseGstin(gstin){
+  const g = (gstin||"").trim().toUpperCase();
+  if(g.length !== 15) return { valid:false, error: g.length ? `GSTIN must be 15 characters (got ${g.length})` : null };
+  if(!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[0-9A-Z]{1}[Z]{1}[0-9A-Z]{1}$/.test(g)){
+    return { valid:false, error:"That doesn't look like a valid GSTIN format" };
+  }
+  const stateCode = g.slice(0,2);
+  const pan = g.slice(2,12);
+  const stateName = GST_CODE_TO_STATE[stateCode];
+  if(!stateName) return { valid:false, error:`Unknown state code "${stateCode}"` };
+  return { valid:true, stateCode, stateName, pan, gstin: g };
+}
+
+// PAN's 4th character encodes the holder type — useful validation feedback.
+function panHolderType(pan){
+  const map = { P:"Individual", C:"Company", H:"HUF", F:"Firm/LLP", A:"AOP",
+                T:"Trust", B:"Body of Individuals", L:"Local Authority",
+                J:"Artificial Juridical Person", G:"Government" };
+  return map[(pan||"")[3]] || null;
+}
+
+/* ============================================================
+   DAY BOOK — every posted voucher, with drill-down, edit and delete
+   ============================================================ */
+function renderDayBook(content){
+  const from = state.periodFrom || "";
+  const to = state.periodTo || "";
+  const accName = id => (state.coa.find(a=>a.id===id)||{}).name || "Unknown";
+
+  let vouchers = (state.vouchers||[]).slice();
+  if(from) vouchers = vouchers.filter(v=>v.voucher_date >= from);
+  if(to) vouchers = vouchers.filter(v=>v.voucher_date <= to);
+  if(state.dayBookType && state.dayBookType !== "all") vouchers = vouchers.filter(v=>v.voucher_type === state.dayBookType);
+  if(state.dayBookSearch){
+    const q = state.dayBookSearch.toLowerCase();
+    vouchers = vouchers.filter(v=>
+      (v.narration||"").toLowerCase().includes(q) ||
+      (v.voucher_number||"").toLowerCase().includes(q) ||
+      (v.voucher_lines||[]).some(l=> accName(l.account_id).toLowerCase().includes(q))
+    );
+  }
+  vouchers.sort((a,b)=> a.voucher_date < b.voucher_date ? 1 : a.voucher_date > b.voucher_date ? -1 : 0);
+
+  const total = vouchers.reduce((s,v)=>
+    s + (v.voucher_lines||[]).filter(l=>l.line_type==="debit").reduce((x,l)=>x+parseFloat(l.amount||0),0), 0);
+
+  content.innerHTML = `
+    <div class="card">
+      <div class="row" style="gap:10px;flex-wrap:wrap;align-items:flex-end;">
+        <div class="field" style="flex:1;min-width:200px;"><label>Search</label>
+          <input class="form-input" id="db-search" placeholder="Ledger, narration or voucher no…" value="${escapeHtml(state.dayBookSearch||'')}" style="width:100%;" />
+        </div>
+        <div class="field"><label>Voucher type</label>
+          <select class="form-input" id="db-type" style="width:150px;">
+            <option value="all">All types</option>
+            ${["Contra","Payment","Receipt","Journal","Sales","Purchase","Bank"].map(t=>`<option value="${t}" ${state.dayBookType===t?'selected':''}>${t}</option>`).join("")}
+          </select>
+        </div>
+        <div style="font-size:12px;color:var(--muted);padding-bottom:8px;">
+          ${vouchers.length} voucher${vouchers.length===1?'':'s'} · ${fmtINR(total)}
+          ${from||to?`<br/><span style="font-size:11px;">Period ${from||'start'} → ${to||'today'} (${IS_MAC?'Ctrl+Shift+2':'Alt+F2'} to change)</span>`:''}
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      ${vouchers.length===0 ? `<div style="padding:20px;color:var(--muted);font-size:13px;">No vouchers found for this period/filter.</div>` : ''}
+      ${vouchers.map(v=>{
+        const lines = v.voucher_lines||[];
+        const vTotal = lines.filter(l=>l.line_type==="debit").reduce((s,l)=>s+parseFloat(l.amount||0),0);
+        const open = state.dayBookOpen === v.id;
+        return `
+        <div style="border-bottom:1px solid var(--border);">
+          <div class="table-row" style="cursor:pointer;" data-open-v="${v.id}">
+            <span style="width:95px;font-size:12.5px;">${v.voucher_date}</span>
+            <span style="width:110px;font-size:12px;color:var(--muted);">${escapeHtml(v.voucher_number||'—')}</span>
+            <span style="width:80px;font-size:12px;"><span class="match-badge" style="background:#eef2f8;color:#1d4ed8;">${escapeHtml(v.voucher_type)}</span></span>
+            <span style="flex:1;font-size:12.5px;">${escapeHtml(v.narration || lines.map(l=>accName(l.account_id)).slice(0,2).join(", ") || '—')}</span>
+            <span style="width:110px;text-align:right;font-weight:700;font-size:12.5px;">${fmtINR(vTotal)}</span>
+            <span style="width:24px;text-align:right;color:var(--muted2);">${open?'▼':'▶'}</span>
+          </div>
+          ${open ? `
+            <div style="background:var(--panel2);padding:10px 14px;">
+              <div class="table-header" style="margin-bottom:4px;">
+                <span style="flex:1;">Ledger</span><span style="width:110px;text-align:right;">Debit</span><span style="width:110px;text-align:right;">Credit</span>
+              </div>
+              ${lines.map(l=>`
+                <div class="table-row" style="border:none;padding:5px 4px;">
+                  <span style="flex:1;font-size:12.5px;">${escapeHtml(accName(l.account_id))}
+                    ${l.tax_kind?`<span class="match-badge" style="background:#dbeafe;color:#1d4ed8;">${l.tax_kind.toUpperCase()} ${l.tax_rate||''}%</span>`:''}
+                  </span>
+                  <span style="width:110px;text-align:right;font-size:12.5px;">${l.line_type==='debit'?fmtINR(l.amount):''}</span>
+                  <span style="width:110px;text-align:right;font-size:12.5px;">${l.line_type==='credit'?fmtINR(l.amount):''}</span>
+                </div>`).join("")}
+              ${v.reference_no?`<div style="font-size:11.5px;color:var(--muted);margin-top:6px;">Ref: ${escapeHtml(v.reference_no)}</div>`:''}
+              <div class="row" style="gap:8px;margin-top:10px;">
+                ${canEdit("entry") ? `<button class="small-btn" data-dup-v="${v.id}">Duplicate into new entry</button>` : ''}
+                ${canEdit("ledger") ? `<button class="small-btn" data-del-v="${v.id}" style="color:var(--err);">Delete voucher</button>` : ''}
+              </div>
+            </div>` : ''}
+        </div>`;
+      }).join("")}
+    </div>
+  `;
+
+  const searchEl = document.getElementById("db-search");
+  searchEl.addEventListener("input", e=>{
+    state.dayBookSearch = e.target.value;
+    const pos = e.target.selectionStart;
+    renderDayBook(content);
+    const el = document.getElementById("db-search");
+    el.focus(); el.setSelectionRange(pos, pos);
+  });
+  document.getElementById("db-type").addEventListener("change", e=>{
+    state.dayBookType = e.target.value; renderDayBook(content);
+  });
+  content.querySelectorAll("[data-open-v]").forEach(el=>{
+    el.addEventListener("click", ()=>{
+      state.dayBookOpen = state.dayBookOpen === el.dataset.openV ? null : el.dataset.openV;
+      renderDayBook(content);
+    });
+  });
+  content.querySelectorAll("[data-dup-v]").forEach(el=>{
+    el.addEventListener("click", (ev)=>{ ev.stopPropagation(); duplicateVoucher(el.dataset.dupV); });
+  });
+  content.querySelectorAll("[data-del-v]").forEach(el=>{
+    el.addEventListener("click", async (ev)=>{
+      ev.stopPropagation();
+      if(!confirm("Delete this voucher and all its lines?")) return;
+      const ok = await deleteVoucher(el.dataset.delV);
+      if(ok){
+        state.vouchers = await loadVouchers(state.activeCompanyId);
+        state.dayBookOpen = null;
+        showToast("Voucher deleted");
+        renderDayBook(content);
+      }
+    });
+  });
+}
+
+// Loads a posted voucher back into the entry screen as a fresh draft.
+function duplicateVoucher(voucherId){
+  const v = (state.vouchers||[]).find(x=>x.id===voucherId);
+  if(!v){ showToast("Voucher not found", "err"); return; }
+  state.voucherLines = (v.voucher_lines||[]).map(l=>({
+    id: uid("ln"), accountId: l.account_id, type: l.line_type, amount: String(l.amount),
+    taxKind: l.tax_kind || undefined, taxRate: l.tax_rate ?? undefined,
+    taxableValue: l.taxable_value ?? undefined, taxApplied: !!l.tax_kind,
+  }));
+  state.draftType = v.voucher_type;
+  state.draftNarration = v.narration || "";
+  state.draftDate = defaultVoucherDate();
+  state.voucherSupplyType = v.supply_type || "intra";
+  state.tab = "entry";
+  document.querySelectorAll(".nav-item").forEach(b=>b.classList.remove("active"));
+  const nav = document.querySelector('.nav-item[data-tab="entry"]');
+  if(nav) nav.classList.add("active");
+  renderMain();
+  showToast("Voucher duplicated — review and post");
+}
+
+// Payment / Receipt / Contra behave like Tally's single-entry mode: one side
+// (bank or cash) is fixed at the top, and the balancing line is generated
+// against it automatically when you post.
+function isSingleEntryType(){
+  return ["Payment","Receipt","Contra"].includes(state.draftType || "Journal");
+}
+
+// The side the fixed account sits on: Payment credits bank (money out),
+// Receipt debits it (money in).
+function singleEntrySide(){
+  return state.draftType === "Receipt" ? "debit" : "credit";
+}
+
+// True if this ledger is a debtor/creditor-type party — bill-wise details only
+// make sense for those.
+function isPartyLedger(accountId){
+  const acc = state.coa.find(a=>a.id===accountId);
+  if(!acc) return false;
+  if(acc.is_party) return true;
+  const g = (state.accountGroups||[]).find(x=>x.id===acc.group_id);
+  return !!g && /debtor|creditor|advance|loan|deposit/i.test(g.name);
+}
+
+// Outstanding bills for a party: every 'new' reference less anything settled
+// against it. Used to populate the "Against Ref" picker.
+function outstandingBills(accountId){
+  const refs = (state.billRefs||[]).filter(b=>b.account_id === accountId);
+  const byName = {};
+  refs.forEach(r=>{
+    if(!byName[r.bill_name]) byName[r.bill_name] = { bill_name: r.bill_name, balance: 0, due_date: r.due_date };
+    // 'new' adds to the outstanding, 'against' settles it
+    byName[r.bill_name].balance += (r.ref_type === "new" ? 1 : -1) * parseFloat(r.amount || 0);
+  });
+  return Object.values(byName)
+    .map(b=>({ ...b, balance: Math.round(b.balance*100)/100 }))
+    .filter(b=> Math.abs(b.balance) > 0.009)
+    .sort((a,b)=> (a.due_date||"").localeCompare(b.due_date||""));
+}
+
 function renderEntry(content){
   if(state.voucherLines.length === 0){
     state.voucherLines = [
@@ -1546,9 +1981,31 @@ function renderEntry(content){
         <span><b>${IS_MAC?'Ctrl+Shift+2':'Alt+F2'}</b> period</span>
         <span><b>Type</b> to search ledgers</span><span><b>↑↓</b> pick</span><span><b>Enter</b> select / next / balance line</span>
         <span><b>${ALT}+G</b> GST</span><span><b>${ALT}+T</b> TDS</span><span><b>${ALT}+I</b> Stock</span>
-        <span><b>Ctrl+R</b> repeat narration</span><span><b>${ALT}+D</b> delete line</span>
+        <span><b>Ctrl+R</b> repeat narration</span><span><b>${ALT}+2</b> duplicate last voucher</span><span><b>${ALT}+B</b> bill ref / cost centre / stock</span><span><b>${ALT}+D</b> delete line</span>
         <span><b>Ctrl+A</b> save</span><span><b>Esc</b> close panel / clear</span>
       </div>
+
+      ${isSingleEntryType() ? `
+        <div style="background:#eef2f8;border:1px solid #c7d7ee;border-radius:8px;padding:10px 12px;margin-bottom:12px;">
+          <div class="row" style="gap:10px;align-items:flex-end;flex-wrap:wrap;">
+            <div class="field" style="flex:1;min-width:240px;position:relative;">
+              <label>${state.draftType==='Receipt' ? 'Received into' : state.draftType==='Contra' ? 'Transfer from' : 'Paid from'}</label>
+              <input class="form-input" id="se-account" autocomplete="off" placeholder="Bank or cash ledger…"
+                     value="${escapeHtml(ledgerLabel(state.singleEntryAccountId))}" style="width:100%;" />
+              <div class="acc-dropdown" id="se-dropdown"></div>
+            </div>
+            ${(state.draftType==='Payment'||state.draftType==='Receipt') ? `
+              <div class="field" style="width:150px;"><label>Cheque / UTR no.</label>
+                <input class="form-input" id="v-instrument" value="${escapeHtml(state.draftInstrument||'')}" style="width:100%;" />
+              </div>
+              <div class="field" style="width:150px;"><label>Instrument date</label>
+                <input class="form-input" id="v-instrdate" type="date" value="${state.draftInstrumentDate||''}" style="width:100%;" />
+              </div>` : ''}
+          </div>
+          <div style="font-size:11px;color:var(--muted2);margin-top:6px;">
+            This side is fixed — list the other ledgers below and the balancing line here is created for you.
+          </div>
+        </div>` : ''}
 
       <div class="line-header">
         <span style="flex:1;">Account</span><span style="width:90px;">Type</span><span style="width:130px;">Amount</span><span style="width:28px;"></span>
@@ -1566,8 +2023,56 @@ function renderEntry(content){
               <option value="credit" ${l.type==='credit'?'selected':''}>Credit</option>
             </select>
             <input class="form-input line-amount" type="number" placeholder="0.00" style="width:130px;" value="${l.amount}" />
+            <button class="icon-btn line-detail" title="Bill reference / cost centre / stock (${ALT}+B)">⋯</button>
             <button class="icon-btn line-remove">✕</button>
           </div>
+          ${state.lineDetailOpen === l.id ? `
+            <div class="line-detail-panel" data-detail="${l.id}" style="background:#eef2f8;border:1px solid #c7d7ee;border-radius:8px;padding:10px 12px;margin:2px 0 8px 0;">
+              <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end;">
+                ${isPartyLedger(l.accountId) ? `
+                  <div class="field" style="width:130px;"><label>Bill ref type</label>
+                    <select class="form-input ld-reftype" style="width:100%;">
+                      <option value="new" ${l.billRefType==='new'||!l.billRefType?'selected':''}>New Ref</option>
+                      <option value="against" ${l.billRefType==='against'?'selected':''}>Against Ref</option>
+                      <option value="advance" ${l.billRefType==='advance'?'selected':''}>Advance</option>
+                      <option value="onaccount" ${l.billRefType==='onaccount'?'selected':''}>On Account</option>
+                    </select>
+                  </div>
+                  <div class="field" style="flex:1;min-width:150px;"><label>Bill / reference no.</label>
+                    ${l.billRefType==='against'
+                      ? `<select class="form-input ld-billname" style="width:100%;">
+                           <option value="">Select outstanding bill…</option>
+                           ${outstandingBills(l.accountId).map(b=>`<option value="${escapeHtml(b.bill_name)}" ${l.billName===b.bill_name?'selected':''}>${escapeHtml(b.bill_name)} — ${fmtINR(b.balance)}</option>`).join("")}
+                         </select>`
+                      : `<input class="form-input ld-billname" placeholder="e.g. INV-0012" value="${escapeHtml(l.billName||'')}" style="width:100%;" />`}
+                  </div>
+                  <div class="field" style="width:140px;"><label>Due date</label>
+                    <input class="form-input ld-duedate" type="date" value="${l.billDueDate||''}" style="width:100%;" />
+                  </div>` : ''}
+                ${(state.costCentres||[]).length ? `
+                  <div class="field" style="width:170px;"><label>Cost centre</label>
+                    <select class="form-input ld-costcentre" style="width:100%;">
+                      <option value="">— none —</option>
+                      ${state.costCentres.map(cc=>`<option value="${cc.id}" ${l.costCentreId===cc.id?'selected':''}>${escapeHtml(cc.name)}</option>`).join("")}
+                    </select>
+                  </div>` : ''}
+                ${(state.stockItems||[]).length ? `
+                  <div class="field" style="width:170px;"><label>Stock item</label>
+                    <select class="form-input ld-stockitem" style="width:100%;">
+                      <option value="">— none —</option>
+                      ${state.stockItems.map(si=>`<option value="${si.id}" ${l.stockItemId===si.id?'selected':''}>${escapeHtml(si.name)}</option>`).join("")}
+                    </select>
+                  </div>
+                  <div class="field" style="width:90px;"><label>Qty</label>
+                    <input class="form-input ld-qty" type="number" value="${l.stockQty||''}" style="width:100%;" />
+                  </div>
+                  <div class="field" style="width:100px;"><label>Rate</label>
+                    <input class="form-input ld-rate" type="number" value="${l.stockRate||''}" style="width:100%;" />
+                  </div>` : ''}
+                <button class="small-btn ld-close" style="align-self:flex-end;">Done</button>
+              </div>
+              <div style="font-size:11px;color:var(--muted2);margin-top:6px;">Qty × Rate fills this line's amount automatically. Esc or Done to close.</div>
+            </div>` : ''}
         `).join("")}
       </div>
       <div class="row" style="margin-top:8px;gap:8px;">
@@ -1689,6 +2194,10 @@ function renderEntry(content){
       state.voucherLines = state.voucherLines.filter(l=>l.id!==id);
       renderEntry(content);
     });
+    row.querySelector(".line-detail").addEventListener("click", ()=>{
+      state.lineDetailOpen = state.lineDetailOpen === id ? null : id;
+      renderEntry(content);
+    });
 
     // ---- Type-ahead ledger picker (Tally-style) ----
     let matches = [];
@@ -1703,8 +2212,9 @@ function renderEntry(content){
       dropdown.innerHTML =
         matches.map((a,i)=>`
           <div class="acc-item ${i===0?'active':''}" data-pick="${a.id}">
-            <span>${escapeHtml(a.name)}${a.alias?` <span class="grp">(${escapeHtml(a.alias)})</span>`:''}</span>
-            <span class="grp">${escapeHtml(groupNameFor(a))}</span>
+            <span>${escapeHtml(a.name)}${a.alias?` <span class="grp">(${escapeHtml(a.alias)})</span>`:''}
+              ${a.gst_applicable&&parseFloat(a.gst_rate)>0?`<span class="grp">GST ${a.gst_rate}%</span>`:''}</span>
+            <span class="grp">${escapeHtml(ledgerBalanceLabel(a))} · ${escapeHtml(groupNameFor(a))}</span>
           </div>`).join("")
         + (query.trim()
             ? `<div class="acc-item create-new" data-create="${escapeHtml(query.trim())}">+ Create ledger "${escapeHtml(query.trim())}"</div>`
@@ -1846,6 +2356,41 @@ function renderEntry(content){
     });
   });
 
+  // ---- per-line detail panel (bill ref / cost centre / stock) ----
+  content.querySelectorAll(".line-detail-panel").forEach(panel=>{
+    const id = panel.dataset.detail;
+    const setField = (patch)=>{
+      state.voucherLines = state.voucherLines.map(l=> l.id===id ? {...l, ...patch} : l);
+    };
+    const q = (cls)=> panel.querySelector(cls);
+    if(q(".ld-reftype")) q(".ld-reftype").addEventListener("change", e=>{ setField({billRefType:e.target.value}); renderEntry(content); });
+    if(q(".ld-billname")) q(".ld-billname").addEventListener("input", e=> setField({billName:e.target.value}));
+    if(q(".ld-billname") && q(".ld-billname").tagName === "SELECT")
+      q(".ld-billname").addEventListener("change", e=> setField({billName:e.target.value}));
+    if(q(".ld-duedate")) q(".ld-duedate").addEventListener("change", e=> setField({billDueDate:e.target.value}));
+    if(q(".ld-costcentre")) q(".ld-costcentre").addEventListener("change", e=> setField({costCentreId:e.target.value||null}));
+    if(q(".ld-stockitem")) q(".ld-stockitem").addEventListener("change", e=> setField({stockItemId:e.target.value||null}));
+
+    // Qty × Rate drives the line amount, so stock entry needs no separate panel
+    const recalc = ()=>{
+      const line = state.voucherLines.find(l=>l.id===id);
+      const qty = parseFloat(line.stockQty)||0, rate = parseFloat(line.stockRate)||0;
+      if(qty>0 && rate>0){
+        const amt = (Math.round(qty*rate*100)/100).toFixed(2);
+        setField({ amount: amt });
+        const amtEl = content.querySelector(`.line-row[data-line="${id}"] .line-amount`);
+        if(amtEl) amtEl.value = amt;
+        refreshEntryTotals();
+      }
+    };
+    if(q(".ld-qty")) q(".ld-qty").addEventListener("input", e=>{ setField({stockQty:e.target.value}); recalc(); });
+    if(q(".ld-rate")) q(".ld-rate").addEventListener("input", e=>{ setField({stockRate:e.target.value}); recalc(); });
+    if(q(".ld-close")) q(".ld-close").addEventListener("click", ()=>{ state.lineDetailOpen = null; renderEntry(content); });
+    panel.addEventListener("keydown", e=>{
+      if(e.key === "Escape"){ e.preventDefault(); e.stopPropagation(); state.lineDetailOpen = null; renderEntry(content); }
+    });
+  });
+
   // after re-render, if we just auto-added a line, focus its ledger field
   if(state.focusLastLine){
     state.focusLastLine = false;
@@ -1859,6 +2404,59 @@ function renderEntry(content){
   document.getElementById("v-date").addEventListener("change", e=> state.draftDate = e.target.value);
   document.getElementById("v-type").addEventListener("change", e=> state.draftType = e.target.value);
   document.getElementById("v-supply").addEventListener("change", e=> state.voucherSupplyType = e.target.value);
+
+  // ---- Single-entry (Payment/Receipt/Contra) fixed-account picker ----
+  const seInput = document.getElementById("se-account");
+  if(seInput){
+    const seDrop = document.getElementById("se-dropdown");
+    let seMatches = [], seHi = 0;
+    // Bank and cash ledgers first, since that's what this field is for
+    const bankCashFirst = (list)=> list.slice().sort((a,b)=>{
+      const rank = x => /bank|cash/i.test(groupNameFor(x)) ? 0 : 1;
+      return rank(a)-rank(b) || a.name.localeCompare(b.name);
+    });
+    const seOpen = (q)=>{
+      seMatches = bankCashFirst(searchLedgers(q));
+      seHi = 0;
+      seDrop.innerHTML = seMatches.length
+        ? seMatches.map((a,i)=>`<div class="acc-item ${i===0?'active':''}" data-sepick="${a.id}">
+             <span>${escapeHtml(a.name)}</span>
+             <span class="grp">${escapeHtml(ledgerBalanceLabel(a))} · ${escapeHtml(groupNameFor(a))}</span>
+           </div>`).join("")
+        : `<div class="acc-empty">No matching ledger</div>`;
+      seDrop.style.display = "block";
+      seDrop.querySelectorAll("[data-sepick]").forEach(el=>{
+        el.addEventListener("mousedown", ev=>{ ev.preventDefault(); sePick(el.dataset.sepick); });
+      });
+    };
+    const seClose = ()=> seDrop.style.display = "none";
+    const seHiApply = ()=>{
+      seDrop.querySelectorAll(".acc-item").forEach((el,i)=> el.classList.toggle("active", i===seHi));
+    };
+    const sePick = (id)=>{
+      const acc = state.coa.find(a=>a.id===id);
+      if(!acc) return;
+      state.singleEntryAccountId = id;
+      seInput.value = acc.name;
+      seClose();
+      const firstRow = content.querySelector('.line-row .line-acc-input');
+      if(firstRow) firstRow.focus();
+    };
+    seInput.addEventListener("focus", ()=>{ seInput.select(); seOpen(seInput.value); });
+    seInput.addEventListener("input", ()=>{ state.singleEntryAccountId = null; seOpen(seInput.value); });
+    seInput.addEventListener("blur", ()=> setTimeout(seClose, 150));
+    seInput.addEventListener("keydown", e=>{
+      const items = seDrop.querySelectorAll(".acc-item");
+      if(e.key === "ArrowDown"){ e.preventDefault(); seHi = Math.min(seHi+1, items.length-1); seHiApply(); }
+      else if(e.key === "ArrowUp"){ e.preventDefault(); seHi = Math.max(seHi-1, 0); seHiApply(); }
+      else if(e.key === "Enter"){ e.preventDefault(); if(items[seHi]) sePick(items[seHi].dataset.sepick); }
+      else if(e.key === "Escape"){ seClose(); }
+    });
+    const instrEl = document.getElementById("v-instrument");
+    if(instrEl) instrEl.addEventListener("input", e=> state.draftInstrument = e.target.value);
+    const instrDateEl = document.getElementById("v-instrdate");
+    if(instrDateEl) instrDateEl.addEventListener("change", e=> state.draftInstrumentDate = e.target.value);
+  }
   document.getElementById("v-narration").addEventListener("input", e=> state.draftNarration = e.target.value);
   // Enter on narration posts the voucher — completes the keyboard-only loop
   document.getElementById("v-narration").addEventListener("keydown", e=>{
@@ -1973,7 +2571,29 @@ async function submitVoucher(content){
   });
   if(incomplete){ showToast("Every line needs both an account and an amount", "err"); return; }
 
-  const validLines = state.voucherLines.filter(l=>l.accountId && parseFloat(l.amount)>0);
+  let validLines = state.voucherLines.filter(l=>l.accountId && parseFloat(l.amount)>0);
+
+  // Single-entry mode: generate the bank/cash side automatically from the
+  // difference, so the user only ever lists the other ledgers.
+  if(isSingleEntryType()){
+    if(!state.singleEntryAccountId){
+      showToast(`Select the ${state.draftType==='Receipt'?'account money was received into':'account money was paid from'}`, "err");
+      const se = document.getElementById("se-account"); if(se) se.focus();
+      return;
+    }
+    if(!validLines.length){ showToast("Add at least one ledger line", "err"); return; }
+    const dr = validLines.filter(l=>l.type==="debit").reduce((s,l)=>s+parseFloat(l.amount||0),0);
+    const cr = validLines.filter(l=>l.type==="credit").reduce((s,l)=>s+parseFloat(l.amount||0),0);
+    const diff = Math.round((dr-cr)*100)/100;
+    if(diff !== 0){
+      validLines = validLines.concat([{
+        accountId: state.singleEntryAccountId,
+        type: diff > 0 ? "credit" : "debit",
+        amount: String(Math.abs(diff)),
+      }]);
+    }
+  }
+
   if(validLines.length<2){ showToast("Add at least two lines", "err"); return; }
 
   const totalDebit = validLines.filter(l=>l.type==="debit").reduce((s,l)=>s+(parseFloat(l.amount)||0),0);
@@ -1984,7 +2604,9 @@ async function submitVoucher(content){
   const type = document.getElementById("v-type").value;
   const narration = document.getElementById("v-narration").value;
   const lineArgs = validLines.map(l=>({accountId:l.accountId,type:l.type,amount:parseFloat(l.amount),
-    taxKind:l.taxKind, taxRate:l.taxRate, taxableValue:l.taxableValue}));
+    taxKind:l.taxKind, taxRate:l.taxRate, taxableValue:l.taxableValue,
+    costCentreId:l.costCentreId, billName:l.billName, billRefType:l.billRefType, billDueDate:l.billDueDate,
+    stockItemId:l.stockItemId, stockQty:l.stockQty, stockRate:l.stockRate}));
   const hasStock = state.pendingStockLines && state.pendingStockLines.length;
   const ok = hasStock
     ? await postVoucherWithStock(state.activeCompanyId, date, type, narration, lineArgs, state.pendingStockLines)
@@ -1994,8 +2616,10 @@ async function submitVoucher(content){
     state.voucherLines = [];
     state.draftNarration = "";
     state.pendingStockLines = [];
+    state.draftInstrument = ""; state.draftInstrumentDate = "";
     if(hasStock) state.stockMovements = await loadStockMovements(state.activeCompanyId);
     state.vouchers = await loadVouchers(state.activeCompanyId);
+    state.billRefs = await loadBillReferences(state.activeCompanyId);
     renderEntry(content);
   }
 }
@@ -2201,6 +2825,29 @@ function bindGlobalShortcuts(){
       } else {
         showToast("No previous narration to repeat", "err");
       }
+      return;
+    }
+    // Alt+B — open bill reference / cost centre / stock detail for the current line
+    if(e.altKey && e.code === "KeyB"){
+      const row = document.activeElement && document.activeElement.closest(".line-row");
+      if(row){
+        e.preventDefault();
+        state.lineDetailOpen = row.dataset.line;
+        renderEntry(content);
+        setTimeout(()=>{
+          const p = content.querySelector(".line-detail-panel");
+          const first = p && p.querySelector("select, input");
+          if(first) first.focus();
+        }, 30);
+      }
+      return;
+    }
+    // Alt+2 — duplicate the most recently posted voucher into a new draft
+    if(e.altKey && e.code === "Digit2"){
+      e.preventDefault();
+      const last = (state.vouchers||[])[0];
+      if(last) duplicateVoucher(last.id);
+      else showToast("No previous voucher to duplicate", "err");
       return;
     }
     // Alt+D — remove the line the cursor is currently in
@@ -2522,9 +3169,58 @@ function renderLedger(content){
   });
 }
 
+async function loadOrganisation(){
+  const { data } = await supa.from("organisations").select("*").limit(1).maybeSingle();
+  return data;
+}
+async function loadInvitations(){
+  const { data } = await supa.from("invitations").select("*").order("created_at", { ascending:false });
+  return data || [];
+}
+
 function renderAdminPanel(content){
   const roleOptions = ["pending","team_member","admin","super_admin"];
+  const org = state.organisation;
   content.innerHTML = `
+    ${org ? `
+    <div class="card">
+      <div class="card-title">Your organisation</div>
+      <div class="row" style="gap:20px;flex-wrap:wrap;font-size:12.5px;">
+        <div><span style="color:var(--muted);">Firm</span><br/><b>${escapeHtml(org.name)}</b></div>
+        <div><span style="color:var(--muted);">Plan</span><br/><b style="text-transform:capitalize;">${escapeHtml(org.plan)}</b></div>
+        <div><span style="color:var(--muted);">Companies</span><br/><b>${state.companies.length} of ${org.max_companies}</b></div>
+        <div><span style="color:var(--muted);">Users</span><br/><b>${state.allProfiles.length} of ${org.max_users}</b></div>
+        ${org.trial_ends_at?`<div><span style="color:var(--muted);">Trial ends</span><br/><b>${org.trial_ends_at}</b></div>`:''}
+      </div>
+      <div style="font-size:11px;color:var(--muted2);margin-top:8px;">
+        All data below belongs to this organisation only — no other firm using this system can see it.
+      </div>
+    </div>` : ''}
+
+    <div class="card">
+      <div class="card-title">Invite a team member</div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;">
+        <input class="form-input" id="inv-email" type="email" placeholder="colleague@yourfirm.com" style="flex:1;min-width:200px;" />
+        <select class="form-input" id="inv-role" style="width:150px;">
+          <option value="team_member">Team Member</option>
+          <option value="admin">Admin</option>
+        </select>
+        <button class="form-btn" id="inv-send">+ Invite</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted2);margin-top:8px;">
+        They sign up with this email and join your organisation automatically with the role you set — no approval step needed.
+      </div>
+      ${(state.invitations||[]).filter(i=>!i.accepted).length ? `
+        <div style="margin-top:12px;">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px;">Pending invitations</div>
+          ${state.invitations.filter(i=>!i.accepted).map(i=>`
+            <div class="account-row">
+              <span style="font-size:12.5px;">${escapeHtml(i.email)} <span class="grp">${i.role.replace('_',' ')}</span></span>
+              <button class="icon-btn" data-del-inv="${i.id}">✕</button>
+            </div>`).join("")}
+        </div>` : ''}
+    </div>
+
     <div class="card">
       <div class="card-title">Team members (${state.allProfiles.length})</div>
       <div style="display:flex;flex-direction:column;gap:10px;">
@@ -2559,11 +3255,34 @@ function renderAdminPanel(content){
       if(error){ showToast("Error: " + error.message, "err"); return; }
       showToast("Role updated");
       await loadAllProfilesAndPermissions();
+  state.organisation = await loadOrganisation();
+  state.invitations = await loadInvitations();
       renderAdminPanel(content);
     });
   });
 
   wirePermGrids(content);
+
+  const invBtn = document.getElementById("inv-send");
+  if(invBtn) invBtn.addEventListener("click", async ()=>{
+    const email = document.getElementById("inv-email").value.trim();
+    if(!email){ showToast("Enter an email address", "err"); return; }
+    const { error } = await supa.from("invitations").insert({
+      org_id: state.profile.org_id, email,
+      role: document.getElementById("inv-role").value, invited_by: state.profile.id,
+    });
+    if(error){ showToast("Error: " + error.message, "err"); return; }
+    state.invitations = await loadInvitations();
+    showToast(`Invitation created for ${email}`);
+    renderAdminPanel(content);
+  });
+  content.querySelectorAll("[data-del-inv]").forEach(el=>{
+    el.addEventListener("click", async ()=>{
+      await supa.from("invitations").delete().eq("id", el.dataset.delInv);
+      state.invitations = await loadInvitations();
+      renderAdminPanel(content);
+    });
+  });
 }
 
 function renderPermGrid(userId){
@@ -3092,6 +3811,7 @@ document.querySelectorAll(".auth-tab").forEach(t=>{
     t.classList.add("active");
     authMode = t.dataset.authtab;
     document.getElementById("auth-name-field").style.display = authMode==="signup" ? "flex" : "none";
+    document.getElementById("auth-org-field").style.display = authMode==="signup" ? "flex" : "none";
     document.getElementById("auth-submit").textContent = authMode==="signup" ? "Sign up" : "Log in";
     document.getElementById("auth-error").style.display = "none";
   });
@@ -3105,7 +3825,11 @@ document.getElementById("auth-submit").addEventListener("click", async ()=>{
   if(!email || !password){ errEl.textContent = "Enter email and password."; errEl.style.display="block"; return; }
   let res;
   if(authMode === "signup"){
-    res = await supa.auth.signUp({ email, password });
+    const orgName = document.getElementById("auth-org").value.trim();
+    res = await supa.auth.signUp({
+      email, password,
+      options: { data: { organisation_name: orgName || null } },
+    });
     if(!res.error && res.data.user && name){
       await supa.from("profiles").update({ full_name: name }).eq("id", res.data.user.id);
     }
@@ -3355,6 +4079,8 @@ function renderReports(content){
       <button class="recon-tab ${state.reportTab==='trial_balance'?'active':''}" data-rtab="trial_balance">Trial Balance</button>
       <button class="recon-tab ${state.reportTab==='pnl'?'active':''}" data-rtab="pnl">Profit &amp; Loss</button>
       <button class="recon-tab ${state.reportTab==='balance_sheet'?'active':''}" data-rtab="balance_sheet">Balance Sheet</button>
+      <button class="recon-tab ${state.reportTab==='outstanding'?'active':''}" data-rtab="outstanding">Outstandings</button>
+      <button class="recon-tab ${state.reportTab==='costcentre'?'active':''}" data-rtab="costcentre">Cost Centres</button>
     </div>
     <div id="report-controls" class="card"></div>
     <div id="report-body"></div>
@@ -3368,6 +4094,7 @@ function renderReports(content){
 
 function renderReportControls(content){
   const area = document.getElementById("report-controls");
+  if(state.reportTab === "outstanding" || state.reportTab === "costcentre"){ area.innerHTML = ""; return; }
   if(state.reportTab === "pnl"){
     area.innerHTML = `
       <div class="row" style="gap:12px;flex-wrap:wrap;">
@@ -3399,6 +4126,91 @@ function renderReportBody(content){
   if(state.reportTab === "trial_balance") return renderTrialBalance(area);
   if(state.reportTab === "pnl") return renderPnL(area);
   if(state.reportTab === "balance_sheet") return renderBalanceSheet(area);
+  if(state.reportTab === "outstanding") return renderOutstandings(area);
+  if(state.reportTab === "costcentre") return renderCostCentreReport(area);
+}
+
+function renderOutstandings(area){
+  const parties = state.coa.filter(a=>isPartyLedger(a.id));
+  const rows = [];
+  parties.forEach(p=>{
+    outstandingBills(p.id).forEach(b=>{
+      const overdue = b.due_date && b.due_date < todayISO();
+      rows.push({ party: p.name, ...b, overdue });
+    });
+  });
+  rows.sort((a,b)=> (a.due_date||"9999").localeCompare(b.due_date||"9999"));
+  const total = rows.reduce((s,r)=>s+r.balance,0);
+
+  area.innerHTML = `
+    <div class="card">
+      <div class="card-title">Outstanding bills</div>
+      ${rows.length===0 ? `<div style="padding:16px 4px;color:var(--muted);font-size:12.5px;">Nothing outstanding. Bill references entered on voucher lines (${ALT}+B) appear here.</div>` : `
+        <div class="table-header"><span style="flex:1;">Party</span><span style="width:140px;">Bill ref</span><span style="width:110px;">Due date</span><span style="width:120px;text-align:right;">Amount</span></div>
+        ${rows.map(r=>`
+          <div class="table-row">
+            <span style="flex:1;font-size:12.5px;">${escapeHtml(r.party)}</span>
+            <span style="width:140px;font-size:12.5px;">${escapeHtml(r.bill_name)}</span>
+            <span style="width:110px;font-size:12.5px;color:${r.overdue?'var(--err)':'var(--muted)'};">${r.due_date||'—'}${r.overdue?' ⚠':''}</span>
+            <span style="width:120px;text-align:right;font-size:12.5px;font-weight:700;">${fmtINR(r.balance)}</span>
+          </div>`).join("")}
+        <div class="totals-bar" style="border-top:2px solid var(--border2);"><div>Total outstanding: <b>${fmtINR(total)}</b></div></div>
+      `}
+    </div>`;
+}
+
+function renderCostCentreReport(area){
+  const ccs = state.costCentres||[];
+  const totals = {};
+  ccs.forEach(cc=> totals[cc.id] = { name: cc.name, debit:0, credit:0 });
+  (state.vouchers||[]).forEach(v=>{
+    (v.voucher_lines||[]).forEach(l=>{
+      if(!l.cost_centre_id || !totals[l.cost_centre_id]) return;
+      totals[l.cost_centre_id][l.line_type] += parseFloat(l.amount)||0;
+    });
+  });
+
+  area.innerHTML = `
+    <div class="card">
+      <div class="card-title">Cost centres</div>
+      ${canEdit("coa") ? `
+        <div class="row" style="gap:8px;margin-bottom:12px;">
+          <input class="form-input" id="cc-name" placeholder="New cost centre name" style="flex:1;" />
+          <select class="form-input" id="cc-parent" style="width:190px;">
+            <option value="">— top level —</option>
+            ${ccs.map(cc=>`<option value="${cc.id}">${escapeHtml(cc.name)}</option>`).join("")}
+          </select>
+          <button class="form-btn" id="cc-add">+ Add</button>
+        </div>` : ''}
+      ${ccs.length===0 ? `<div style="padding:12px 4px;color:var(--muted);font-size:12.5px;">No cost centres yet. Create one, then tag voucher lines with ${ALT}+B.</div>` : `
+        <div class="table-header"><span style="flex:1;">Cost centre</span><span style="width:120px;text-align:right;">Debit</span><span style="width:120px;text-align:right;">Credit</span><span style="width:120px;text-align:right;">Net</span><span style="width:28px;"></span></div>
+        ${ccs.map(cc=>{
+          const t = totals[cc.id];
+          const net = Math.round((t.debit - t.credit)*100)/100;
+          return `<div class="table-row">
+            <span style="flex:1;font-size:12.5px;">${escapeHtml(cc.name)}</span>
+            <span style="width:120px;text-align:right;font-size:12.5px;">${fmtINR(t.debit)}</span>
+            <span style="width:120px;text-align:right;font-size:12.5px;">${fmtINR(t.credit)}</span>
+            <span style="width:120px;text-align:right;font-size:12.5px;font-weight:700;">${fmtINR(Math.abs(net))} ${net>=0?'Dr':'Cr'}</span>
+            ${canEdit("coa")?`<button class="icon-btn" data-del-cc="${cc.id}">✕</button>`:'<span style="width:28px;"></span>'}
+          </div>`;
+        }).join("")}
+      `}
+    </div>`;
+
+  const addBtn = document.getElementById("cc-add");
+  if(addBtn) addBtn.addEventListener("click", async ()=>{
+    const name = document.getElementById("cc-name").value.trim();
+    if(!name){ showToast("Enter a cost centre name", "err"); return; }
+    const created = await createCostCentre(state.activeCompanyId, name, document.getElementById("cc-parent").value||null);
+    if(created){ state.costCentres.push(created); showToast(`Cost centre "${name}" created`); renderCostCentreReport(area); }
+  });
+  area.querySelectorAll("[data-del-cc]").forEach(el=>{
+    el.addEventListener("click", async ()=>{
+      const ok = await deleteCostCentre(el.dataset.delCc);
+      if(ok){ state.costCentres = state.costCentres.filter(x=>x.id!==el.dataset.delCc); renderCostCentreReport(area); }
+    });
+  });
 }
 
 function renderTrialBalance(area){
