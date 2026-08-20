@@ -1827,7 +1827,8 @@ function renderDayBook(content){
               ${lines.map(l=>`
                 <div class="table-row" style="border:none;padding:5px 4px;">
                   <span style="width:34px;font-size:12px;font-weight:700;color:${l.line_type==='debit'?'#1d4ed8':'#b45309'};">${l.line_type==='debit'?'Dr':'To'}</span>
-                  <span style="flex:1;font-size:12.5px;${l.line_type==='credit'?'padding-left:14px;':''}">${escapeHtml(accName(l.account_id))}
+                  <span style="flex:1;font-size:12.5px;${l.line_type==='credit'?'padding-left:14px;':''}">
+                    <span data-peek-acc="${l.account_id}" style="cursor:pointer;color:#1d4ed8;">${escapeHtml(accName(l.account_id))}</span>
                     ${l.tax_kind?`<span class="match-badge" style="background:#dbeafe;color:#1d4ed8;">${l.tax_kind.toUpperCase()} ${l.tax_rate||''}%</span>`:''}
                   </span>
                   <span style="width:110px;text-align:right;font-size:12.5px;">${l.line_type==='debit'?fmtINR(l.amount):''}</span>
@@ -1860,6 +1861,9 @@ function renderDayBook(content){
       state.dayBookOpen = state.dayBookOpen === el.dataset.openV ? null : el.dataset.openV;
       renderDayBook(content);
     });
+  });
+  content.querySelectorAll("[data-peek-acc]").forEach(el=>{
+    el.addEventListener("click", (ev)=>{ ev.stopPropagation(); ledgerPeekModal(el.dataset.peekAcc); });
   });
   content.querySelectorAll("[data-dup-v]").forEach(el=>{
     el.addEventListener("click", (ev)=>{ ev.stopPropagation(); duplicateVoucher(el.dataset.dupV); });
@@ -1939,6 +1943,201 @@ function outstandingBills(accountId){
     .sort((a,b)=> (a.due_date||"").localeCompare(b.due_date||""));
 }
 
+/* ============================================================
+   LEDGER PEEK — check any party's account without leaving the voucher.
+   Opens over the entry screen, Esc returns you exactly where you were.
+   ============================================================ */
+function ledgerPeekModal(initialAccountId){
+  let accountId = initialAccountId || null;
+  let searchMatches = [];
+  let hi = 0;
+
+  const overlay = document.createElement("div");
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:flex-start;justify-content:center;padding-top:5vh;z-index:1100;";
+  overlay.innerHTML = `
+    <div class="card" style="width:min(900px,94vw);max-height:88vh;display:flex;flex-direction:column;">
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div class="card-title" style="margin:0;">Ledger</div>
+        <span style="font-size:11px;color:var(--muted2);">Type to switch ledger · Esc to close</span>
+      </div>
+      <div style="position:relative;margin-bottom:10px;">
+        <input class="form-input" id="lp-search" autocomplete="off" placeholder="Type a party or ledger name…" style="width:100%;" />
+        <div class="acc-dropdown" id="lp-dropdown"></div>
+      </div>
+      <div id="lp-body" style="overflow-y:auto;flex:1;"></div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const searchEl = overlay.querySelector("#lp-search");
+  const dropEl   = overlay.querySelector("#lp-dropdown");
+  const bodyEl   = overlay.querySelector("#lp-body");
+
+  const close = ()=>{
+    document.body.removeChild(overlay);
+    // Put the cursor back where it was in the voucher
+    const active = document.querySelector(".line-row .line-acc-input");
+    if(active) active.focus();
+  };
+
+  const renderBody = ()=>{
+    if(!accountId){
+      bodyEl.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:13px;">Start typing above to open a ledger.</div>`;
+      return;
+    }
+    const acc = state.coa.find(a=>a.id===accountId);
+    if(!acc){ bodyEl.innerHTML = ""; return; }
+
+    // Build the running statement from every posted voucher
+    const rows = [];
+    (state.vouchers||[]).forEach(v=>{
+      (v.voucher_lines||[]).forEach(l=>{
+        if(l.account_id !== accountId) return;
+        rows.push({
+          date: v.voucher_date, vno: v.voucher_number || "", vtype: v.voucher_type,
+          narration: v.narration || "",
+          contra: (v.voucher_lines||[])
+            .filter(x=>x.account_id !== accountId)
+            .map(x=>(state.coa.find(a=>a.id===x.account_id)||{}).name || "?")
+            .join(", "),
+          type: l.line_type, amount: parseFloat(l.amount)||0,
+        });
+      });
+    });
+    rows.sort((a,b)=> a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+
+    const opening = (parseFloat(acc.opening_balance)||0) * (acc.opening_balance_type === "credit" ? -1 : 1);
+    let running = opening;
+    let totDr = 0, totCr = 0;
+    const body = rows.map(r=>{
+      running += (r.type === "debit" ? 1 : -1) * r.amount;
+      if(r.type === "debit") totDr += r.amount; else totCr += r.amount;
+      return `
+        <div class="table-row" style="padding:6px 4px;">
+          <span style="width:88px;font-size:12px;">${r.date}</span>
+          <span style="width:95px;font-size:11.5px;color:var(--muted);">${escapeHtml(r.vno||r.vtype)}</span>
+          <span style="flex:1;font-size:12.5px;">${escapeHtml(r.contra || r.narration || '—')}</span>
+          <span style="width:100px;text-align:right;font-size:12.5px;">${r.type==='debit'?fmtINR(r.amount):''}</span>
+          <span style="width:100px;text-align:right;font-size:12.5px;">${r.type==='credit'?fmtINR(r.amount):''}</span>
+          <span style="width:115px;text-align:right;font-size:12.5px;font-weight:600;">${fmtINR(Math.abs(running))} ${running>=0?'Dr':'Cr'}</span>
+        </div>`;
+    }).join("");
+
+    const closing = Math.round(running*100)/100;
+    const bills = isPartyLedger(accountId) ? outstandingBills(accountId) : [];
+
+    bodyEl.innerHTML = `
+      <div style="background:var(--panel2);border-radius:8px;padding:10px 12px;margin-bottom:10px;">
+        <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:12px;">
+          <div>
+            <div style="font-weight:700;font-size:14px;">${escapeHtml(acc.name)}
+              ${acc.alias?`<span style="font-size:11px;color:var(--muted2);">(${escapeHtml(acc.alias)})</span>`:''}</div>
+            <div style="font-size:11.5px;color:var(--muted);">${escapeHtml(groupNameFor(acc))}
+              ${acc.gstin?` · GSTIN ${escapeHtml(acc.gstin)}`:''}${acc.state_name?` · ${escapeHtml(acc.state_name)}`:''}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:11px;color:var(--muted);">Closing balance</div>
+            <div style="font-size:17px;font-weight:800;color:${closing>=0?'#1d4ed8':'#b45309'};">
+              ${fmtINR(Math.abs(closing))} ${closing>=0?'Dr':'Cr'}</div>
+          </div>
+        </div>
+        ${acc.credit_period_days||acc.credit_limit ? `
+          <div style="font-size:11.5px;color:var(--muted);margin-top:6px;">
+            ${acc.credit_period_days?`Credit period ${acc.credit_period_days} days`:''}
+            ${acc.credit_limit?` · Limit ${fmtINR(acc.credit_limit)}${closing > acc.credit_limit?' <span style="color:var(--err);font-weight:700;">— EXCEEDED</span>':''}`:''}
+          </div>` : ''}
+      </div>
+
+      ${bills.length ? `
+        <div style="margin-bottom:10px;">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:5px;">Outstanding bills (${bills.length})</div>
+          ${bills.map(b=>{
+            const overdue = b.due_date && b.due_date < todayISO();
+            return `<div class="account-row" style="padding:5px 4px;">
+              <span style="font-size:12.5px;">${escapeHtml(b.bill_name)}
+                ${b.due_date?`<span style="color:${overdue?'var(--err)':'var(--muted2)'};font-size:11px;"> due ${b.due_date}${overdue?' ⚠':''}</span>`:''}</span>
+              <span style="font-size:12.5px;font-weight:600;">${fmtINR(b.balance)}</span>
+            </div>`;
+          }).join("")}
+        </div>` : ''}
+
+      <div class="table-header">
+        <span style="width:88px;">Date</span><span style="width:95px;">Vch</span>
+        <span style="flex:1;">Particulars</span>
+        <span style="width:100px;text-align:right;">Debit</span>
+        <span style="width:100px;text-align:right;">Credit</span>
+        <span style="width:115px;text-align:right;">Balance</span>
+      </div>
+      ${opening !== 0 ? `
+        <div class="table-row" style="padding:6px 4px;color:var(--muted);">
+          <span style="width:88px;font-size:12px;">—</span><span style="width:95px;"></span>
+          <span style="flex:1;font-size:12.5px;font-style:italic;">Opening balance</span>
+          <span style="width:100px;"></span><span style="width:100px;"></span>
+          <span style="width:115px;text-align:right;font-size:12.5px;">${fmtINR(Math.abs(opening))} ${opening>=0?'Dr':'Cr'}</span>
+        </div>` : ''}
+      ${rows.length ? body : `<div style="padding:18px;text-align:center;color:var(--muted);font-size:12.5px;">No transactions yet.</div>`}
+      <div class="totals-bar" style="border-top:2px solid var(--border2);">
+        <div>Total Debit: <b>${fmtINR(totDr)}</b></div>
+        <div>Total Credit: <b>${fmtINR(totCr)}</b></div>
+        <div>Closing: <b>${fmtINR(Math.abs(closing))} ${closing>=0?'Dr':'Cr'}</b></div>
+      </div>`;
+    bodyEl.scrollTop = bodyEl.scrollHeight;   // newest entries in view
+  };
+
+  const openDrop = (q)=>{
+    searchMatches = searchLedgers(q);
+    hi = 0;
+    dropEl.innerHTML = searchMatches.length
+      ? searchMatches.map((a,i)=>`
+          <div class="acc-item ${i===0?'active':''}" data-lp="${a.id}">
+            <span>${escapeHtml(a.name)}${a.alias?` <span class="grp">(${escapeHtml(a.alias)})</span>`:''}</span>
+            <span class="grp">${escapeHtml(ledgerBalanceLabel(a))} · ${escapeHtml(groupNameFor(a))}</span>
+          </div>`).join("")
+      : `<div class="acc-empty">No matching ledger</div>`;
+    dropEl.style.display = "block";
+    dropEl.querySelectorAll("[data-lp]").forEach(el=>{
+      el.addEventListener("mousedown", ev=>{ ev.preventDefault(); pick(el.dataset.lp); });
+    });
+  };
+  const closeDrop = ()=> dropEl.style.display = "none";
+  const applyHi = ()=>{
+    dropEl.querySelectorAll(".acc-item").forEach((el,i)=> el.classList.toggle("active", i===hi));
+    const el = dropEl.querySelectorAll(".acc-item")[hi];
+    if(el) el.scrollIntoView({ block:"nearest" });
+  };
+  const pick = (id)=>{
+    accountId = id;
+    const acc = state.coa.find(a=>a.id===id);
+    searchEl.value = acc ? acc.name : "";
+    closeDrop();
+    renderBody();
+  };
+
+  searchEl.addEventListener("focus", ()=> searchEl.select());
+  searchEl.addEventListener("input", ()=> openDrop(searchEl.value));
+  searchEl.addEventListener("keydown", e=>{
+    e.stopPropagation();
+    const items = dropEl.querySelectorAll(".acc-item");
+    if(e.key === "ArrowDown"){ e.preventDefault();
+      if(dropEl.style.display !== "block") openDrop(searchEl.value);
+      else { hi = Math.min(hi+1, items.length-1); applyHi(); } }
+    else if(e.key === "ArrowUp"){ e.preventDefault(); hi = Math.max(hi-1,0); applyHi(); }
+    else if(e.key === "Enter"){ e.preventDefault(); if(items[hi]) pick(items[hi].dataset.lp); }
+    else if(e.key === "Escape"){ e.preventDefault(); if(dropEl.style.display === "block") closeDrop(); else close(); }
+  });
+  overlay.addEventListener("keydown", e=>{
+    e.stopPropagation();
+    if(e.key === "Escape"){ e.preventDefault(); close(); }
+  });
+  overlay.addEventListener("mousedown", e=>{ if(e.target === overlay) close(); });
+
+  if(accountId){
+    const acc = state.coa.find(a=>a.id===accountId);
+    if(acc) searchEl.value = acc.name;
+  }
+  renderBody();
+  setTimeout(()=>{ searchEl.focus(); if(!accountId) openDrop(""); }, 20);
+}
+
 function renderEntry(content){
   if(state.voucherLines.length === 0){
     state.voucherLines = [
@@ -1996,7 +2195,7 @@ function renderEntry(content){
         <span><b>${IS_MAC?'Ctrl+Shift+2':'Alt+F2'}</b> period</span>
         <span><b>D</b> / <b>T</b> switch Dr/To</span><span><b>Type</b> to search ledgers</span><span><b>↑↓</b> pick</span><span><b>Enter</b> select / next / balance line</span>
         <span><b>${ALT}+G</b> GST</span><span><b>${ALT}+T</b> TDS</span><span><b>${ALT}+I</b> Stock</span>
-        <span><b>Ctrl+R</b> repeat narration</span><span><b>${ALT}+2</b> duplicate last voucher</span><span><b>${ALT}+B</b> bill ref / cost centre / stock</span><span><b>${ALT}+D</b> delete line</span>
+        <span><b>Ctrl+R</b> repeat narration</span><span><b>${ALT}+2</b> duplicate last voucher</span><span><b>${ALT}+B</b> bill ref / cost centre / stock</span><span><b>${ALT}+L</b> view ledger</span><span><b>${ALT}+D</b> delete line</span>
         <span><b>Ctrl+A</b> save</span><span><b>Esc</b> close panel / clear</span>
       </div>
 
@@ -2023,7 +2222,7 @@ function renderEntry(content){
         </div>` : ''}
 
       <div class="line-header">
-        <span style="width:40px;">Dr/To</span><span style="flex:1;">Particulars</span><span style="width:130px;">Amount</span><span style="width:56px;"></span>
+        <span style="width:40px;">Dr/To</span><span style="flex:1;">Particulars</span><span style="width:130px;">Amount</span><span style="width:84px;"></span>
       </div>
       <div id="lines-wrap">
         ${state.voucherLines.map((l,idx)=>`
@@ -2035,6 +2234,7 @@ function renderEntry(content){
               <div class="acc-dropdown"></div>
             </div>
             <input class="form-input line-amount" type="number" placeholder="0.00" style="width:130px;" value="${l.amount}" />
+            <button class="icon-btn line-peek" title="View this ledger (${ALT}+L)">👁</button>
             <button class="icon-btn line-detail" title="Bill reference / cost centre / stock (${ALT}+B)">⋯</button>
             <button class="icon-btn line-remove">✕</button>
           </div>
@@ -2212,6 +2412,10 @@ function renderEntry(content){
     row.querySelector(".line-remove").addEventListener("click", ()=>{
       state.voucherLines = state.voucherLines.filter(l=>l.id!==id);
       renderEntry(content);
+    });
+    row.querySelector(".line-peek").addEventListener("click", ()=>{
+      const line = state.voucherLines.find(l=>l.id===id);
+      ledgerPeekModal(line ? line.accountId : null);
     });
     row.querySelector(".line-detail").addEventListener("click", ()=>{
       state.lineDetailOpen = state.lineDetailOpen === id ? null : id;
@@ -2827,6 +3031,13 @@ function bindGlobalShortcuts(){
       return;
     }
 
+    // Ledger peek works from any screen once a company is open
+    if(state.activeCompanyId && (e.altKey || e.ctrlKey) && e.code === "KeyL" && state.tab !== "entry"){
+      e.preventDefault();
+      ledgerPeekModal(null);
+      return;
+    }
+
     if(state.tab !== "entry" || !state.activeCompanyId) return;
     const content = document.getElementById("content");
 
@@ -2859,6 +3070,20 @@ function bindGlobalShortcuts(){
       } else {
         showToast("No previous narration to repeat", "err");
       }
+      return;
+    }
+    // Alt+L (or Ctrl+L) — peek at the ledger of the line you're on, without
+    // losing the voucher you're part-way through entering.
+    if((e.altKey || e.ctrlKey) && e.code === "KeyL"){
+      e.preventDefault();
+      const row = document.activeElement && document.activeElement.closest(".line-row");
+      let accId = null;
+      if(row){
+        const line = state.voucherLines.find(l=>l.id === row.dataset.line);
+        accId = line ? line.accountId : null;
+      }
+      if(!accId && state.singleEntryAccountId) accId = state.singleEntryAccountId;
+      ledgerPeekModal(accId);
       return;
     }
     // Alt+B — open bill reference / cost centre / stock detail for the current line
